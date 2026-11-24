@@ -10,6 +10,8 @@ test('同编号保留不同难度的首通奖励，章节名片评价不参与�
   const rows = matchRewards(' 16-6 ', stages);
   assert.deepEqual(rows.map(row => [row.difficulty, row.firstClearOriginite]), [['NORMAL',1],['SIX_STAR',1]]);
   assert.deepEqual(matchRewards('未知关卡', stages), []);
+  const adverse = {...normal, stageId:'tough_14-01', code:'14-2', diffGroup:'TOUGH'};
+  assert.equal(matchRewards('14-2', {adverse})[0].diffGroup, 'TOUGH');
   const action = {type:'stage_rewards',stage:'16-6'};
   assert.deepEqual(validateDecision({intent:'inspect',goal:'核查首通',note:'查询配置',action}, {}, true, false).action, action);
 });

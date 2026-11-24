@@ -18,7 +18,7 @@ export function matchRewards(query, stages, campaigns = {}) {
     [stage.code, stage.name, stage.stageId].some(value => value?.trim().toUpperCase() === name)
   ).map(stage => {
     const row = {code: stage.code, name: stage.name?.trim(), stageId: stage.stageId,
-      difficulty: stage.difficulty, firstClearOriginite: stage.diamondOnceDrop,
+      difficulty: stage.difficulty, diffGroup: stage.diffGroup, firstClearOriginite: stage.diamondOnceDrop,
       storyOnly: !!stage.isStoryOnly};
     const campaign = campaigns[stage.stageId];
     if (campaign) row.firstKillOrundum = campaign.breakLadders.flatMap(tier => {
