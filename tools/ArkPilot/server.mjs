@@ -202,6 +202,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         }
         const cache = new Map();
         const excerpts = [];
+        const videoNotes = [];
         const lookupGuide = async a => {
           const key = JSON.stringify(a);
           if (cache.has(key)) return cache.get(key);
@@ -217,19 +218,21 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
           }
           if (a.type === 'analyze_video') {
             const clip = await analyzeVideo(config,a,signal);
+            videoNotes.push({url:clip.url,notes:clip.notes});
             guidance.notes = (clip.url+'\n'+clip.notes+'\n'+guidance.notes).slice(0,6000);
             emit({type:'video_notes',clip,notes:guidance.notes}); cache.set(key,clip); return clip;
           }
           if (a.type === 'adapt_guide') {
             adaptationBlocked = true;
             if (!roster || !guide) throw new Error('适配需要已导入的作业和当前账号的干员名册。');
-            const result = await adaptGuide(guide,roster,[instruction,guidance.notes].join('\n'),
-              m=>proposeTeam(config,{...m,wiki:excerpts.slice(-3)},signal));
-            if (!result.ready) return {reason:result.reason,assessment:result.assessment};
+            const recentRequests = historyFrom(data.history).filter(m=>m.role==='user').slice(-3).map(m=>m.text);
+            const result = await adaptGuide(guide,roster,guidance.notes,
+              m=>proposeTeam(config,{...m,instruction,recentRequests,wiki:excerpts.slice(-3),videos:videoNotes.slice(-2)},signal));
+            if (!result.ready) return {ready:false,reason:result.reason,assessment:result.assessment};
             guide = result.plan; adaptationBlocked = false; formation = true; guidance.plan = briefPlan(guide);
             guidance.notes = (result.reason+'\n'+guidance.notes).slice(0,6000);
             emit({type:'guide_loaded',...result,notes:guidance.notes});
-            return {reason:result.reason,changes:result.changes,plan:guidance.plan};
+            return {ready:true,reason:result.reason,changes:result.changes,plan:guidance.plan};
           }
           if (a.type === 'find_guide') {
             const results = await searchGuides(a.stage,signal);
@@ -240,6 +243,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
           if (!candidates.has(a.id)) throw new Error('请先搜索关卡，或在指令里给出具体作业号。');
           const material = await importGuide(a.id,signal);
           guide = material.plan;
+          guidance.notes = (material.notes || guide.doc?.details || '').slice(0,6000);
           formation = data.formation === true;
           guidance.plan = briefPlan(guide);
           emit({type:'guide_loaded',...material});

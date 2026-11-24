@@ -132,6 +132,7 @@ export async function adaptGuide(plan,roster,notes,propose) {
   if ([...direct.values()].some(s=>aliases.has(s.op.name))) throw new Error('替补名与作业分组重名。');
   const tokens = new Set([...selected.values()].flatMap(s=>s.op.tokens));
   const edited = new Set(), occupied = new Map();
+  const firstDeploy = plan.actions.findIndex(deploy);
   for (const edit of result.edits) {
     if (!bounded(edit?.step,1,output.actions.length) || edited.has(edit.step)) throw new Error('修改的作业步骤无效。');
     edited.add(edit.step);
@@ -145,6 +146,9 @@ export async function adaptGuide(plan,roster,notes,propose) {
             (sameCell(other.location,a.location) || other.rect || other.begin || other.end))) throw new Error('其他动作引用原位置或固定屏幕区域，无法安全搬移。');
       } else if (!['kills','costs','pre_delay','post_delay'].includes(key) || !bounded(value,0,key.endsWith('delay') ? 120000 : key === 'costs' ? 99 : 999)) {
         throw new Error('模型给出的时机或动作字段不受支持。');
+      }
+      if (key === 'kills' && edit.step <= firstDeploy + 1 && value > (a.kills || 0)) {
+        throw new Error('作业尚未部署干员，不能增加开局击杀条件。请沿用原作业的开局时机。');
       }
       a[key] = value;
     }

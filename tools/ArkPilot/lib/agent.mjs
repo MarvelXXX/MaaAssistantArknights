@@ -5,6 +5,13 @@ import { nativeAction } from './maa.mjs';
 
 const endTypes = new Set(['finish', 'ask', 'stop']);
 const researchTools = new Set(['find_guide','load_guide','adapt_guide','search_web','read_wiki','analyze_video']);
+// An explicit request for a runnable adaptation is fulfilled by the attached plan.
+// Explanations, hypothetical questions and prohibitions stay with the planner.
+function wantsAdaptedPlan(text) {
+  if (!/(?:名册|适配|替补|替换|我的干员|my roster|substitut)/iu.test(text)) return false;
+  if (/(?:不要|不用|无需|别|暂缓|暂不|不必)[^，,。；;\n]{0,6}(?:适配|改编|生成|替换)|(?:如何|能否|是否|怎么|支持吗).{0,8}(?:生成|适配)|(?:do not|don't)\s+(?:adapt|generate)/iu.test(text)) return false;
+  return /(?:生成|做成|改成|附上|附为|附到).{0,16}(?:适配|替补|可执行|作业|部署方案)|(?:按|用).{0,16}(?:名册|我的干员).{0,12}(?:适配|改阵容)|(?:adapt|generate).{0,25}(?:my roster|copilot plan)/iu.test(text);
+}
 const shortText = (v,max = 100) => typeof v === 'string' && v.trim() && v.length <= max;
 function integer(value, min, max) {
   if (!Number.isInteger(value) || value < min || value > max) throw new Error('模型返回的动作参数越界或缺失。');
@@ -78,6 +85,8 @@ export async function runAgent({ config, device, instruction, history, readOnly,
   observe = recognize, plan = decide, matches = stillMatches, pause = (ms, s) => delay(ms, undefined, { signal: s }) }) {
   const steps = [];
   const completedTasks = new Set();
+  const requestedAdaptation = wantsAdaptedPlan(instruction);
+  let adaptation;
   let staleCount = 0, actionCount = 0, previousInput, identicalInputs = 0;
   const recent = () => steps.length <= 18 ? steps : [...steps.slice(0, 3), ...steps.slice(-15)];
   for (let turn = 1; ; turn++) {
@@ -93,8 +102,12 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     emit({ type: 'status', text: '等待模型判断', turn });
     const context = { instruction, conversation: history, turn, stepsSoFar: actionCount,
       remainingActions: limit - actionCount, readOnly, recentSteps: recent(), maaAvailable: !!runNative, guidance };
-    const decision = validateDecision(await plan(config, context, frame, signal), frame, readOnly, config.vision, !!runNative, !!guidance?.plan);
+    let decision = validateDecision(await plan(config, context, frame, signal), frame, readOnly, config.vision, !!runNative, !!guidance?.plan);
     signal.throwIfAborted();
+    if (decision.action.type === 'finish' && requestedAdaptation && guidance?.roster && guidance.plan) {
+      if (!adaptation) decision = {...decision,intent:'inspect',note:'正在生成并校验所要求的替补作业。',action:{type:'adapt_guide'}};
+      else if (!adaptation.ready) decision = {...decision,note:adaptation.reason || adaptation.error || '未生成适配作业。',action:{type:'ask'}};
+    }
     const { action, note, goal } = decision;
     if (endTypes.has(action.type)) {
       emit({ type: 'end', outcome: action.type, note, goal, count: actionCount });
@@ -106,6 +119,8 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       let result;
       try { result = await lookupGuide(action); }
       catch (err) { signal.throwIfAborted(); result = {error:err.message}; emit({type:'research_error',text:err.message}); }
+      if (action.type === 'load_guide' && !result?.error) adaptation = null;
+      if (action.type === 'adapt_guide') adaptation = result;
       steps.push({turn,action,note,result});
       actionCount++;
       if (!result?.error) emit({type:'applied',turn,action});

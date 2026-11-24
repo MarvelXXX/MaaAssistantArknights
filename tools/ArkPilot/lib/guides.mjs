@@ -93,7 +93,7 @@ function planId(value) {
 
 export function briefPlan(plan) {
   return plan && {stage:plan.stage_name,title:plan.doc?.title,opers:plan.opers?.slice(0,24),groups:plan.groups?.map(g => g.name).slice(0,24),
-    actionCount:plan.actions.length,firstActions:plan.actions.slice(0,24)};
+    actionCount:plan.actions.length,actionsTruncated:plan.actions.length > 24,firstActions:plan.actions.slice(0,24)};
 }
 
 async function biliInfo(bv, part, signal) {

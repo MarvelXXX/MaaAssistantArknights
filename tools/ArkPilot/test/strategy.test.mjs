@@ -4,6 +4,8 @@ import http from 'node:http';
 import { PNG } from 'pngjs';
 import { adaptGuide, assess, normalizeRoster } from '../lib/roster.mjs';
 import { searchWeb } from '../lib/research.mjs';
+import { decide } from '../lib/model.mjs';
+import { runAgent } from '../lib/agent.mjs';
 import { createServer } from '../server.mjs';
 
 const author = {stage_name:'main_01-07',opers:[{name:'能天使',skill:1,requirements:{elite:1,level:40}}],
@@ -41,11 +43,31 @@ test('适配改写真正的编队、组、部署和撤退，且保护原作业�
   assert.equal(plan.actions[2].name,'克洛丝');
   assert.equal(author.actions[2].name,'能天使');
   await assert.rejects(adapt(author,{...proposal,edits:[{step:2,location:[4,1]}]}),/地形/);
+  await assert.rejects(adapt(author,{...proposal,edits:[{step:1,kills:10}]}),/开局击杀/);
   await assert.rejects(adapt(author,{...proposal,picks:[{...proposal.picks[0],skill:3},proposal.picks[1]]}),/练度/);
   const untrained = await normalizeRoster({operators:[...box.operators.slice(0,1),{name:'克洛丝',level:1,elite:0},box.operators[2]]});
   await assert.rejects(adaptGuide(author,untrained,'',async()=>proposal),/练度/);
   await assert.rejects(adapt({...author,actions:[...author.actions,{type:'Deploy',name:'“弦惊”',location:[4,1],direction:'Right'}]},proposal),/召唤物/);
   assert.equal((await adapt(author,{status:'blocked',reason:'缺少核心机制'})).ready,false);
+});
+
+test('实用工具以函数调用发送，将取帧结果作为工具回复交给下一轮判断',async t=>{
+  const requests = [];
+  t.mock.method(globalThis,'fetch',async (_url,options)=>{
+    requests.push(JSON.parse(options.body));
+    const message = requests.length === 1 ? {tool_calls:[{type:'function',function:{name:'analyze_video',
+      arguments:JSON.stringify({bv:'BV1QY411L7H2',part:1,start:15,end:30})}}]} :
+      {content:JSON.stringify({intent:'inspect',goal:'看视频',note:'已读取',action:{type:'finish'}})};
+    return Response.json({choices:[{message}]});
+  });
+  const cfg={url:'http://localhost/v1',model:'test',vision:true},ctx={instruction:'看看视频',recentSteps:[]};
+  const step=await decide(cfg,ctx,{},AbortSignal.timeout(5000));
+  assert.equal(step.action.type,'analyze_video');
+  assert.ok(requests[0].tools.some(t=>t.function.name==='analyze_video'));
+  ctx.recentSteps.push({turn:1,action:step.action,result:{notes:'15.9 秒：开局'}});
+  await decide(cfg,ctx,{},AbortSignal.timeout(5000));
+  assert.equal(requests[1].messages.at(-1).role,'tool');
+  assert.match(requests[1].messages.at(-1).content,/15.9/);
 });
 
 test('更换核心干员技能时仍保留对其专属召唤物的依赖检查',async()=>{
@@ -76,6 +98,20 @@ async function listen(server,t) {
   t.after(()=>{server.closeAllConnections();server.close();});
   return 'http://127.0.0.1:'+server.address().port;
 }
+test('要求生成替补作业时不能把文字承诺当作完成，校验失败可见',async()=>{
+  const simulate=async instruction=>{
+    const events=[];
+    await runAgent({config:{},device:null,readOnly:true,signal:AbortSignal.timeout(5000),limit:2,instruction,history:[],
+      guidance:{roster:box,plan:author},emit:e=>events.push(e),
+      plan:async()=>({intent:'inspect',goal:'核对',note:'已生成',action:{type:'finish'}}),
+      lookupGuide:async()=>({ready:false,reason:'名册中缺少可部署人选'})});
+    return events;
+  };
+  const attempted=await simulate('只用我的名册生成可执行替补作业。');
+  assert.equal(attempted.find(e=>e.type==='decision').action.type,'adapt_guide');
+  assert.equal(attempted.at(-1).outcome,'ask'); assert.match(attempted.at(-1).note,/缺少/);
+  assert.equal((await simulate('请解释替补作业，不要生成作业。')).some(e=>e.type==='decision'),false);
+});
 test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无设备时可适配',async t=>{
   const decision = a => ({intent:'operate',goal:'按我的干员适配',note:'核对编队',action:{type:a,...(a==='maa'?{task:'Copilot'}:{})}});
   let actions = ['adapt_guide','maa','finish'];
