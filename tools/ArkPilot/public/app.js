@@ -157,6 +157,7 @@ function actionName(a) {
   switch (a.type) {
     case 'maa': return 'Maa · ' + a.task + (a.stage ? ' ' + a.stage + ' × ' + a.times : '');
     case 'find_guide': return '搜索 ' + a.stage + ' 作业';
+    case 'stage_rewards': return '核对关卡奖励 · ' + a.stage;
     case 'load_guide': return '导入作业 #' + a.id;
     case 'search_web': return '联网搜索 · '+a.query;
     case 'read_wiki': return '阅读 PRTS Wiki · '+a.title;

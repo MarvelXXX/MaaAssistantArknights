@@ -4,7 +4,7 @@ import { decide } from './model.mjs';
 import { nativeAction } from './maa.mjs';
 
 const endTypes = new Set(['finish', 'ask', 'stop']);
-const researchTools = new Set(['find_guide','load_guide','adapt_guide','search_web','read_wiki','analyze_video']);
+const researchTools = new Set(['find_guide','load_guide','adapt_guide','search_web','read_wiki','analyze_video','stage_rewards']);
 // An explicit request for a runnable adaptation is fulfilled by the attached plan.
 // Explanations, hypothetical questions and prohibitions stay with the planner.
 function wantsAdaptedPlan(text) {
@@ -38,7 +38,7 @@ export function validateDecision(reply, frame, readOnly, vision, maaAvailable = 
         (a.end != null && a.end <= (a.start ?? 0))) throw new Error('视频片段时间无效。');
     return {...decision,action:{type:a.type,bv:a.bv,part,start:a.start,end:a.end}};
   }
-  if (a.type === 'find_guide' && typeof a.stage === 'string' && a.stage.trim() && a.stage.length <= 100) {
+  if (['find_guide','stage_rewards'].includes(a.type) && shortText(a.stage)) {
     return {...decision, action:{type:a.type,stage:a.stage.trim()}};
   }
   if (a.type === 'load_guide' && typeof a.id === 'string' && /^[1-9]\d{0,9}$/.test(a.id)) {

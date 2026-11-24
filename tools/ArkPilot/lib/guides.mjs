@@ -52,7 +52,7 @@ export async function stageBoard(stage) {
   return {tiles:map.tiles.map(row=>row.map(tile=>tile.buildableType)),terrain:map.tiles.map(row=>row.map(tile=>tile.tileKey))};
 }
 
-export async function publicJson(url, signal, headers = {}) {
+export async function publicJson(url, signal, headers = {}, maxBytes = 4 * 1024 * 1024) {
   const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(18000)]), headers, redirect:'error' })
     .catch(() => { signal.throwIfAborted(); throw new Error('攻略站连接失败，请稍后重试或导入本地文件。'); });
   if (!response.ok) { await response.body?.cancel(); throw new Error('攻略站返回 HTTP ' + response.status + '。'); }
@@ -60,7 +60,7 @@ export async function publicJson(url, signal, headers = {}) {
   let length = 0;
   for await (const chunk of response.body) {
     length += chunk.length;
-    if (length > 4 * 1024 * 1024) throw new Error('攻略站响应过大。');
+    if (length > maxBytes) throw new Error('攻略站响应过大。');
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
