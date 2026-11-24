@@ -76,7 +76,7 @@ export function matchChapterRewards(query, stageTable, zones, archive, activitie
   const byMode = new Map();
   let firstClearOriginite = 0;
   for (const stage of entries.values()) {
-    let mode = {FOUR_STAR:'突袭／遭遇', SIX_STAR:'沙盘推演'}[stage.difficulty];
+    let mode = {FOUR_STAR:'突袭／遭遇', SIX_STAR:'险地作战'}[stage.difficulty];
     if (!mode) mode = {TOUGH:'磨难险地', NORMAL:'标准实战'}[stage.diffGroup] || '普通';
     if (stage.isStoryOnly) mode = '剧情';
     if (!byMode.has(mode)) byMode.set(mode, {mode, codes:[], firstClearOriginite:0});
