@@ -20,8 +20,9 @@ function wantsAdaptedPlan(text) {
   return /(?:生成|做成|改成|附上|附为|附到).{0,16}(?:适配|替补|可执行|作业|部署方案)|(?:按|用).{0,16}(?:名册|我的干员).{0,12}(?:适配|改阵容)|(?:adapt|generate).{0,25}(?:my roster|copilot plan)/iu.test(text);
 }
 const shortText = (v,max = 100) => typeof v === 'string' && v.trim() && v.length <= max;
+class InvalidInput extends Error {}
 function integer(value, min, max) {
-  if (!Number.isInteger(value) || value < min || value > max) throw new Error('模型返回的动作参数越界或缺失。');
+  if (!Number.isInteger(value) || value < min || value > max) throw new InvalidInput('动作参数必须是 '+min+' 至 '+max+' 之间的整数。');
   return value;
 }
 
@@ -52,7 +53,8 @@ export function validateDecision(reply, frame, readOnly, vision, maaAvailable = 
     return {...decision, action:{type:a.type,id:a.id}};
   }
   if (researchTools.has(a.type)) throw new Error('资料工具 ' + a.type + ' 的参数无效。');
-  if (readOnly || reply.intent === 'inspect') throw new Error('只读分析收到了操作指令，已停止。');
+  if (readOnly) throw new Error('只读分析收到了操作指令，已停止。');
+  if (reply.intent === 'inspect') throw new InvalidInput('只读意图不能执行游戏输入。请按本轮用户要求重新选择动作和意图。');
   let action;
   const px = (n, size) => Math.round(integer(n, 0, 1000) * (size - 1) / 1000);
   switch (a.type) {
@@ -65,7 +67,7 @@ export function validateDecision(reply, frame, readOnly, vision, maaAvailable = 
       if ('id' in a) {
         if ('x' in a || 'y' in a) throw new Error('点击目标不唯一。');
         const target = frame.anchors.find(t => t.id === a.id);
-        if (!target) throw new Error('模型选取的目标不在当前识别结果中。');
+        if (!target) throw new InvalidInput('模型选取的目标不在当前识别结果中。');
         const [l, t, w, h] = target.box;
         x = integer(Math.round(l + w / 2), 0, frame.width - 1);
         y = integer(Math.round(t + h / 2), 0, frame.height - 1);
@@ -95,7 +97,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
   const completedTasks = new Set();
   const protectsCurrency = noPremiumSpend.test(instruction);
   const requestedAdaptation = wantsAdaptedPlan(instruction);
-  let adaptation;
+  let adaptation, rejectedInput;
   let staleCount = 0, actionCount = 0, previousInput, identicalInputs = 0;
   const recent = () => steps.length <= 18 ? steps : [...steps.slice(0, 3), ...steps.slice(-15)];
   for (let turn = 1; ; turn++) {
@@ -117,7 +119,18 @@ export async function runAgent({ config, device, instruction, history, readOnly,
         result: typeof step.result === 'string' ? step.result : step.result?.error || '已查资料',
       }));
     }
-    let decision = validateDecision(await plan(config, context, frame, signal), frame, readOnly, config.vision, !!runNative, !!guidance?.plan);
+    if (rejectedInput) context.rejectedInput = rejectedInput;
+    const reply = await plan(config, context, frame, signal);
+    let decision;
+    try {
+      decision = validateDecision(reply, frame, readOnly, config.vision, !!runNative, !!guidance?.plan);
+    } catch (error) {
+      if (!(error instanceof InvalidInput) || rejectedInput) throw error;
+      rejectedInput = error.message;
+      emit({type:'status',text:'动作参数校验失败，未执行。正在重新识别并规划。',turn});
+      continue;
+    }
+    rejectedInput = undefined;
     signal.throwIfAborted();
     if (decision.action.type === 'finish' && requestedAdaptation && guidance?.roster && guidance.plan) {
       if (!adaptation) decision = {...decision,intent:'inspect',note:'正在生成并校验所要求的替补作业。',action:{type:'adapt_guide'}};

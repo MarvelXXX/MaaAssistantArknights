@@ -37,6 +37,17 @@ test('达到步数上限后仍读取最后一帧，但不继续操作', async ()
   assert.equal(f.emitted.filter(e => e.type === 'frame').length, 2);
 });
 
+test('无效输入不会发送，重新截图后仅允许一次修正',async()=>{
+  const bad={type:'tap',x:1580,y:500};
+  const f=fixture([bad,{type:'tap',id:3},{type:'finish'}]);
+  await runAgent(f.params);
+  assert.deepEqual(f.inputs,[{type:'tap',x:645,y:70}]);
+  assert.equal(f.emitted.filter(e=>e.type==='frame').length,3);
+  const again=fixture([bad,bad]);
+  await assert.rejects(runAgent(again.params),/1000/);
+  assert.equal(again.inputs.length,0);
+});
+
 test('用户禁止花费两种货币时，从当前帧拦截确认按钮，仍可关闭或领取免费报酬', async () => {
   const run = async (label, action, source='OCR') => {
     const f = fixture([action,{type:'finish'}], {instruction:'不能消耗源石和合成玉',
