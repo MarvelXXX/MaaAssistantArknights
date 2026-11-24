@@ -1,7 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateDecision } from '../lib/agent.mjs';
-import { matchRewards, matchSimulations } from '../lib/rewards.mjs';
+import { matchChapterRewards, matchRewards, matchSimulations } from '../lib/rewards.mjs';
+
+test('章节首通按关卡ID去重，保留难度，排除过期、尚未开放和临时借用主线地图的活动', () => {
+  const battle = {stageId:'base',code:'1-1',stageType:'MAIN',zoneId:'main_1',difficulty:'NORMAL',diamondOnceDrop:1};
+  const alt = {...battle,stageId:'hard',difficulty:'FOUR_STAR'};
+  const expired = {...battle,stageId:'old',stageType:'ACTIVITY'};
+  const future = {...battle,stageId:'future'};
+  const stageTable = {stages:{battle,alt,expired,future},stageValidInfo:{future:{startTs:11,endTs:-1}}};
+  const zones = {main_1:{type:'MAINLINE',zoneNameSecond:'主章',zoneNameTitleCurrent:'01'}};
+  const emptyActivity = {basicInfo:{},zoneToActivity:{}};
+  const emptyArchive = {stageList:{},retroActList:{},zoneToRetro:{},stageValidInfo:{}};
+  const main = matchChapterRewards('EP01', stageTable, zones, emptyArchive, emptyActivity, 10);
+  assert.equal(main.chapter,'主章');
+  assert.equal(main.firstClearOriginite,2);
+  assert.deepEqual(main.modes.map(m=>[m.mode,m.codes]),[['普通',['1-1']],['突袭／遭遇',['1-1']]]);
+
+  const live = {...battle,stageType:'ACTIVITY',zoneId:'live'};
+  const stages = {stages:{live}};
+  const activity = {basicInfo:{rerun:{name:'活动',startTime:0,endTime:20}},zoneToActivity:{live:'rerun'}};
+  const copy = {...live,zoneId:'archive'};
+  const archive = {stageList:{copy},zoneToRetro:{archive:'series'},retroActList:{series:{name:'活动',startTime:0}},stageValidInfo:{}};
+  assert.equal(matchChapterRewards('活动',stages,{},archive,activity,10).firstClearOriginite,1);
+  assert.equal(matchChapterRewards('活动',stages,{},emptyArchive,activity,20).found,false);
+  const action = {type:'chapter_rewards', stage:'活动'};
+  assert.deepEqual(validateDecision({intent:'inspect',goal:'核查章节',note:'查询',action},{},true,false).action,action);
+});
 
 test('同编号保留不同难度的首通奖励，章节名片评价不参与计算', () => {
   const normal = {code:'16-6', name:'痛觉明灭', stageId:'main_16-05', difficulty:'NORMAL', diamondOnceDrop:1};

@@ -48,6 +48,52 @@ export async function stageRewards(query, signal) {
   return {rows: matches, sources: sources.map(sourceLink)};
 }
 
+export function matchChapterRewards(query, stageTable, zones, archive, activities, now) {
+  const input = query.trim();
+  const episode = /^(?:EP\s*(\d+)|第\s*(\d+)\s*章)$/i.exec(input);
+  const mainZone = episode && Object.values(zones).find(zone =>
+    ['MAINLINE','MAINLINE_ACTIVITY'].includes(zone.type) && /^\d+$/.test(zone.zoneNameTitleCurrent) &&
+    Number(zone.zoneNameTitleCurrent) === Number(episode[1] || episode[2]));
+  const name = mainZone?.zoneNameSecond || input;
+  const entries = new Map();
+  const add = stage => { if (stage.diamondOnceDrop > 0) entries.set(stage.stageId, stage); };
+  const isAvailable = window => !window || window.startTs <= now && (window.endTs < 0 || now < window.endTs);
+  for (const stage of Object.values(stageTable.stages)) {
+    const zone = zones[stage.zoneId];
+    const basic = activities.basicInfo[activities.zoneToActivity[stage.zoneId]];
+    if (!isAvailable(stageTable.stageValidInfo?.[stage.stageId])) continue;
+    if (zone?.zoneNameSecond === name &&
+        (zone.type === 'MAINLINE' && ['MAIN','SUB'].includes(stage.stageType) || stage.stageType === 'DAILY')) add(stage);
+    if (basic?.name === name && basic.startTime <= now && now < basic.endTime &&
+        (stage.stageType === 'ACTIVITY' || zone?.type === 'MAINLINE_ACTIVITY')) add(stage);
+  }
+  for (const stage of Object.values(archive.stageList)) {
+    const series = archive.retroActList[archive.zoneToRetro[stage.zoneId]];
+    const window = archive.stageValidInfo[stage.stageId];
+    if (series?.name === name && series.startTime <= now && isAvailable(window)) add(stage);
+  }
+  if (!entries.size) return {chapter:name, found:false};
+  const byMode = new Map();
+  let firstClearOriginite = 0;
+  for (const stage of entries.values()) {
+    let mode = {FOUR_STAR:'突袭／遭遇', SIX_STAR:'沙盘推演'}[stage.difficulty];
+    if (!mode) mode = {TOUGH:'磨难险地', NORMAL:'标准实战'}[stage.diffGroup] || '普通';
+    if (stage.isStoryOnly) mode = '剧情';
+    if (!byMode.has(mode)) byMode.set(mode, {mode, codes:[], firstClearOriginite:0});
+    const entry = byMode.get(mode);
+    entry.codes.push(stage.code);
+    entry.firstClearOriginite += stage.diamondOnceDrop;
+    firstClearOriginite += stage.diamondOnceDrop;
+  }
+  return {chapter:name, found:true, firstClearOriginite, modes:[...byMode.values()], accountStatus:'需据实机勋标、领奖状态或前置进度核对'};
+}
+
+export async function chapterRewards(query, signal) {
+  const names = ['stage_table','zone_table','retro_table','activity_table'];
+  const [stage, zone, archive, activity] = await Promise.all(names.map(name => table(name, signal)));
+  return {...matchChapterRewards(query, stage, zone.zones, archive, activity, Date.now()/1000), sources:names.map(sourceLink)};
+}
+
 export function matchSimulations(query, stages, operators) {
   const key = query.trim().toUpperCase();
   const names = new Map(operators.map(operator => [operator.id,operator.name]));

@@ -9,7 +9,7 @@ import { listDevices, connectDevice, selectDevice } from './lib/device.mjs';
 import { recognize } from './lib/vision.mjs';
 import { chooseModel, listModels, explainFrames, proposeTeam } from './lib/model.mjs';
 import { runAgent } from './lib/agent.mjs';
-import { stageRewards } from './lib/rewards.mjs';
+import { chapterRewards, stageRewards } from './lib/rewards.mjs';
 import { briefPlan, checkPlan, importGuide, openBiliMedia, searchGuides } from './lib/guides.mjs';
 import { executeMaa, maaHome, nativeAction, recognizeRecording, scanRoster } from './lib/maa.mjs';
 import { adaptGuide, assess, normalizeRoster } from './lib/roster.mjs';
@@ -207,8 +207,8 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         const lookupGuide = async a => {
           const key = JSON.stringify(a);
           if (cache.has(key)) return cache.get(key);
-          if (a.type === 'stage_rewards') {
-            const result = await stageRewards(a.stage, signal);
+          if (a.type === 'stage_rewards' || a.type === 'chapter_rewards') {
+            const result = await (a.type === 'chapter_rewards' ? chapterRewards : stageRewards)(a.stage, signal);
             emit({type:'sources', results:result.sources});
             cache.set(key, result);
             return result;
