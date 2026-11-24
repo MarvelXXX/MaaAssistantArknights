@@ -1,23 +1,33 @@
 import http from 'node:http';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { listDevices, connectDevice, selectDevice } from './lib/device.mjs';
 import { recognize } from './lib/vision.mjs';
-import { chooseModel, listModels } from './lib/model.mjs';
+import { chooseModel, listModels, explainFrames } from './lib/model.mjs';
 import { runAgent } from './lib/agent.mjs';
+import { briefPlan, checkPlan, importGuide, openBiliMedia, searchGuides } from './lib/guides.mjs';
+import { executeMaa, maaHome, nativeAction, recognizeRecording } from './lib/maa.mjs';
 
 const staticFiles = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
+staticFiles.set('/guides.js', ['guides.js', 'text/javascript']);
+function eventStream(res) {
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });
+  res.flushHeaders();
+  return event => { if (!res.destroyed) res.write(JSON.stringify(event) + '\n'); };
+}
 function json(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(data));
 }
-async function body(req) {
+async function body(req, maxBytes = 524288) {
   let bytes = 0;
   const chunks = [];
   for await (const chunk of req) {
     bytes += chunk.length;
-    if (bytes > 262144) throw new Error('请求内容过长。');
+    if (bytes > maxBytes) throw new Error('请求内容过长。');
     chunks.push(chunk);
   }
   try {
@@ -39,7 +49,7 @@ function historyFrom(data) {
     .map(m => ({ role: m.role, text: m.text.slice(0, 4000) }));
 }
 
-export function createServer({ getDevice = selectDevice } = {}) {
+export function createServer({ getDevice = selectDevice, getHome = maaHome, native = executeMaa, recording = recognizeRecording } = {}) {
   let active = false;
   return http.createServer(async (req, res) => {
     // Browser requests must originate in this local UI, including after DNS rebinding.
@@ -47,10 +57,10 @@ export function createServer({ getDevice = selectDevice } = {}) {
     const host = req.headers.host;
     if (![ '127.0.0.1:' + port, 'localhost:' + port ].includes(host) ||
         (req.headers.origin && req.headers.origin !== 'http://' + host) ||
-        req.headers['sec-fetch-site'] === 'cross-site' && req.method !== 'GET') return json(res, 403, { error: '仅接受本机界面请求。' });
+        req.headers['sec-fetch-site'] === 'cross-site' && req.url?.startsWith('/api/')) return json(res, 403, { error: '仅接受本机界面请求。' });
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'");
     const controller = new AbortController();
     res.once('close', () => { if (!res.writableEnded) controller.abort(); });
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30 * 60 * 1000)]);
@@ -61,12 +71,58 @@ export function createServer({ getDevice = selectDevice } = {}) {
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
         return res.end(file);
       }
-      if (req.method === 'GET' && req.url === '/api/health') return json(res, 200, { app: 'ArkPilot', active });
+      if (req.method === 'GET' && req.url === '/api/health') return json(res, 200, { app: 'ArkPilot', guides:true, active });
+      const media = req.method === 'GET' && req.url.match(/^\/api\/guides\/media\/(BV[a-zA-Z0-9]{10})\/(\d{1,4})$/);
+      if (media) {
+        const src = await openBiliMedia(media[1], Number(media[2]), signal, req.headers.range);
+        const headers = {'Content-Type':'video/mp4'};
+        for (const key of ['content-length','content-range','accept-ranges']) {
+          if (src.headers.has(key)) headers[key] = src.headers.get(key);
+        }
+        res.writeHead(src.status,headers);
+        await pipeline(Readable.fromWeb(src.body),res,{signal});
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/api/guides/video' && req.headers['content-type'] === 'application/octet-stream') {
+        if (active) return json(res,409,{error:'有任务正在运行。'});
+        if (Number(req.headers['content-length']) > 1024 ** 3) return json(res,413,{error:'录像超过 1 GiB。'});
+        active = true;
+        try {
+          const emit = eventStream(res);
+          const result = await recording(req, req.headers['x-video-ext'], await getHome(), signal,
+            text => emit({type:'core',text}));
+          emit({type:'guide', ...result}); return res.end();
+        } finally { active = false; }
+      }
       if (req.method !== 'POST' || req.headers['content-type']?.split(';')[0] !== 'application/json') {
         return json(res, 404, { error: '未知请求。' });
       }
-      const data = await body(req);
+      const data = await body(req, req.url === '/api/guides/frames' ? 6 * 1024 * 1024 : undefined);
       switch (req.url) {
+        case '/api/guides/online-video': {
+          if (active) return json(res,409,{error:'有任务正在运行。'});
+          active = true;
+          try {
+            const home = await getHome();
+            if (!home) throw new Error('录像转作业需要 Maa 运行包。');
+            const src = await openBiliMedia(data.bv,data.part,signal);
+            const emit = eventStream(res);
+            const result = await recording(Readable.fromWeb(src.body),'mp4',home,signal,text => emit({type:'core',text}));
+            emit({type:'guide',...result}); return res.end();
+          } finally { active = false; }
+        }
+        case '/api/maa': return json(res,200,{home:await getHome()});
+        case '/api/guides/search': return json(res,200,{results:await searchGuides(data.query,signal,data.videoCode)});
+        case '/api/guides/import': return json(res,200,await importGuide(data.value,signal));
+        case '/api/guides/frames': return json(res,200,await explainFrames(modelConfig(data),data.frames,signal));
+        case '/api/guides/check': {
+          if (active) return json(res,409,{error:'有任务正在运行。'});
+          active = true;
+          try {
+            const version = await native({task:'Copilot'}, {home:await getHome(), guide:checkPlan(data.guide), prepare:true, signal});
+            return json(res,200,{version});
+          } finally { active = false; }
+        }
         case '/api/devices': return json(res, 200, { devices: await listDevices(signal) });
         case '/api/connect': return json(res, 200, { devices: await connectDevice(data.address, signal) });
         case '/api/models': return json(res, 200, { models: await listModels(modelConfig(data), signal) });
@@ -80,7 +136,10 @@ export function createServer({ getDevice = selectDevice } = {}) {
         default: return json(res, 404, { error: '未知接口。' });
       }
       if (active) return json(res, 409, { error: '已有指令在执行，请在原对话中停止或等待结束。' });
-      const config = modelConfig(data);
+      let guide = data.guide == null ? null : checkPlan(data.guide);
+      const direct = data.native ? nativeAction(data.native,!!guide) : null;
+      if (direct && data.readOnly === true) throw new Error('当前为只读分析，请切换到允许操作再运行 Maa。');
+      const config = direct ? null : modelConfig(data);
       const instruction = data.instruction?.trim();
       if (!instruction || instruction.length > 4000) throw new Error('指令长度应在 1 至 4000 字之间。');
       const limit = data.limit ?? 24;
@@ -88,13 +147,42 @@ export function createServer({ getDevice = selectDevice } = {}) {
       active = true;
       try {
         const device = await getDevice(data.serial, signal);
-        config.model = await chooseModel(config, signal);
-        res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });
-        res.flushHeaders();
-        const emit = event => { if (!res.destroyed) res.write(JSON.stringify(event) + '\n'); };
+        const home = await getHome();
+        if (config) config.model = await chooseModel(config, signal);
+        const emit = eventStream(res);
+        const runNative = a => native(a, {home,device,serial:data.serial,guide,formation:data.formation,signal,
+          progress:text => emit({type:'core',text})});
+        if (direct) {
+          emit({type:'decision',action:direct,goal:instruction,note:'正在运行 Maa 任务'});
+          await runNative(direct);
+          emit({type:'applied',action:direct});
+          emit({type:'end',outcome:'finish',goal:instruction,note:'Maa 已报告 ' + direct.task + ' 任务链执行结束。'});
+          return res.end();
+        }
         emit({ type: 'model', model: config.model });
+        const guidance = {notes:typeof data.notes === 'string' ? data.notes.slice(0,6000) : '', plan:briefPlan(guide)};
+        const candidates = new Set(instruction.match(/\b[1-9]\d{0,9}\b/g) || []);
+        if (Array.isArray(data.recentSearch)) {
+          guidance.candidates = data.recentSearch.slice(0,20).filter(r => typeof r?.id === 'string' && /^[1-9]\d{0,9}$/.test(r.id))
+            .map(r => ({id:r.id,title:String(r.title || '').slice(0,150)}));
+          for (const r of guidance.candidates) candidates.add(r.id);
+        }
+        const lookupGuide = async a => {
+          if (a.type === 'find_guide') {
+            const results = await searchGuides(a.stage,signal);
+            for (const r of results) candidates.add(r.id);
+            emit({type:'guide_search',stage:a.stage,results});
+            return results;
+          }
+          if (!candidates.has(a.id)) throw new Error('请先搜索关卡，或在指令里给出具体作业号。');
+          const material = await importGuide(a.id,signal);
+          guide = material.plan;
+          guidance.plan = briefPlan(guide);
+          emit({type:'guide_loaded',...material});
+          return guidance.plan;
+        };
         await runAgent({ config, device, instruction, history: historyFrom(data.history),
-          readOnly: data.readOnly === true, limit, signal, emit });
+          readOnly: data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:home ? runNative : null });
         res.end();
       } finally { active = false; }
     } catch (error) {

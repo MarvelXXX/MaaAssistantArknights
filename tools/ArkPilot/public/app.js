@@ -1,3 +1,4 @@
+import { setupGuides } from './guides.js';
 const $ = id => document.getElementById(id);
 const storeKey = 'arkpilot.settings.v1';
 let saved;
@@ -142,7 +143,7 @@ function message(role, text, error = false) {
   return content;
 }
 function busy(value) {
-  for (const id of ['device','mode','settingsBtn','refreshFrame','clear']) $(id).disabled = value;
+  for (const id of ['device','mode','settingsBtn','libraryBtn','attachment','refreshFrame','clear']) $(id).disabled = value;
   $('clear').disabled = value || !history.length;
   $('send').hidden = value; $('stop').hidden = !value;
 }
@@ -153,6 +154,9 @@ function addStep(text) {
 }
 function actionName(a) {
   switch (a.type) {
+    case 'maa': return 'Maa · ' + a.task + (a.stage ? ' ' + a.stage + ' × ' + a.times : '');
+    case 'find_guide': return '搜索 ' + a.stage + ' 作业';
+    case 'load_guide': return '导入作业 #' + a.id;
     case 'tap': return '点击 (' + a.x + ', ' + a.y + ')';
     case 'swipe': return '滑动 (' + a.x + ', ' + a.y + ') → (' + a.x2 + ', ' + a.y2 + ')';
     case 'back': return '返回';
@@ -172,11 +176,11 @@ async function* events(res) {
     if (rest.trim()) yield JSON.parse(rest);
   } finally { reader.releaseLock(); }
 }
-async function submit(event) {
-  event.preventDefault();
-  const instruction = $('instruction').value.trim();
+async function submit(event, native = null, label = '') {
+  event?.preventDefault();
+  const instruction = label || $('instruction').value.trim();
   if (!instruction || controller) return;
-  if (!config.url) { openSettings('填写模型服务地址后即可发送这条指令。'); return; }
+  if (!native && !config.url) { openSettings('填写模型服务地址后即可发送这条指令。'); return; }
   const serial = $('device').value;
   if (!serial) { openSettings('请先连接设备。'); return; }
   const local = new AbortController(); controller = local;
@@ -184,15 +188,18 @@ async function submit(event) {
   const previous = history.filter(m => m.serial === serial).slice(-12).map(({ role, text }) => ({ role, text }));
   history.push({ role: 'user', text: instruction, serial }); message('user', instruction);
   const reply = message('assistant', '正在连接…');
-  $('steps').replaceChildren(); $('idle').hidden = true; $('instruction').value = '';
+  $('steps').replaceChildren(); $('idle').hidden = true; if (!native) $('instruction').value = '';
   busy(true);
   let end = false, step, applied = [];
   try {
-    const res = await post('run', { ...config, serial, instruction, history: previous,
+    const res = await post('run', { ...(native ? {} : config), ...guides.current(), native, serial, instruction, history: previous,
       readOnly: $('mode').value === 'inspect' }, local.signal);
     for await (const e of events(res)) {
       if (e.type === 'frame') showFrame(e);
+      else if (e.type === 'guide_loaded') guides.render(e);
+      else if (e.type === 'guide_search') { $('stageSearch').value = e.stage; $('stageSearch').oninput(); guides.showResults(e.results); }
       else if (e.type === 'model') $('modelLight').title = e.model;
+      else if (e.type === 'core') { reply.textContent = 'Maa · ' + e.text; if (step) step.textContent = reply.textContent; }
       else if (e.type === 'status') reply.textContent = '第 ' + e.turn + ' 次观察 · ' + e.text;
       else if (e.type === 'decision') {
         reply.textContent = e.goal + '\n' + e.note;
@@ -215,6 +222,7 @@ async function submit(event) {
     addStep(text); history.push({ role: 'assistant', text: text + (applied.length ? ' 已执行：' + applied.join('、') : ''), serial });
   } finally {
     controller = null; busy(false); $('instruction').focus();
+    if (native) refreshPreview();
   }
 }
 $('compose').onsubmit = submit;
@@ -231,5 +239,6 @@ $('clear').onclick = () => {
 document.querySelectorAll('[data-prompt]').forEach(button => {
   button.onclick = () => { $('instruction').value = button.dataset.prompt; $('instruction').focus(); };
 });
+const guides = setupGuides({post,events,getConfig:() => config,runDirect:(a,label) => submit(null,a,label)});
 modelStatus();
 scanDevices();

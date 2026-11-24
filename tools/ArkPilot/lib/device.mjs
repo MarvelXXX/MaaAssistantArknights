@@ -10,7 +10,7 @@ const clients = new Set([
   'com.YoStarKR.Arknights', 'tw.txwy.and.arknights',
 ]);
 
-function adbPath() {
+export function adbPath() {
   if (process.env.ARK_ADB) return process.env.ARK_ADB;
   const roots = [process.env.ANDROID_SDK_ROOT, process.env.ANDROID_HOME];
   if (process.env.LOCALAPPDATA) roots.push(path.join(process.env.LOCALAPPDATA, 'Android', 'Sdk'));
@@ -70,6 +70,7 @@ export async function selectDevice(serial, signal) {
     return pkg;
   }
   return {
+    checkGame,
     async capture(s) {
       await checkGame(s);
       const png = await run(['exec-out', 'screencap', '-p'], s);

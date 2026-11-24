@@ -1,0 +1,172 @@
+import { execFile, spawn } from 'node:child_process';
+import { createWriteStream, existsSync } from 'node:fs';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import path from 'node:path';
+import { createInterface } from 'node:readline';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { fileURLToPath } from 'node:url';
+import { parseEnv, promisify } from 'node:util';
+import { adbPath } from './device.mjs';
+import { checkPlan } from './guides.mjs';
+
+const worker = fileURLToPath(new URL('./maa-worker.ps1', import.meta.url));
+const execute = promisify(execFile);
+const videoPhases = {OcrFormation:'识别编队',OcrStage:'识别关卡',MatchDeployment:'匹配待部署干员',Slice:'切分战斗画面',CompSkill:'分析技能',DetectOperators:'识别场上干员'};
+const clients = { 'com.hypergryph.arknights':'Official', 'com.hypergryph.arknights.bilibili':'Bilibili',
+  'com.YoStarEN.Arknights':'YoStarEN', 'com.YoStarJP.Arknights':'YoStarJP', 'com.YoStarKR.Arknights':'YoStarKR', 'tw.txwy.and.arknights':'txwy' };
+
+export async function maaHome() {
+  if (process.platform !== 'win32') return null;
+  const downloads = path.join(homedir(), 'Downloads');
+  const candidates = process.env.ARK_MAA_HOME ? [process.env.ARK_MAA_HOME] :
+    (await readdir(downloads, {withFileTypes:true}).catch(() => []))
+      .filter(d => d.isDirectory() && /^MAA(?:$|[-_])/i.test(d.name))
+      .sort((a,b) => b.name.localeCompare(a.name, 'en', {numeric:true})).map(d => path.join(downloads,d.name));
+  return candidates.find(dir => existsSync(path.join(dir,'MaaCore.dll')) && existsSync(path.join(dir,'resource','config.json'))) || null;
+}
+
+export function nativeAction(a, hasPlan) {
+  if (a?.task === 'Award') return { type:'maa', task:'Award' };
+  if (a?.task === 'Copilot' && hasPlan) return { type:'maa', task:'Copilot' };
+  if (a?.task === 'Fight' && typeof a.stage === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(a.stage) &&
+      a.stage.length <= 40 && Number.isInteger(a.times) && a.times >= 1 && a.times <= 100) {
+    return { type:'maa', task:'Fight', stage:a.stage.toUpperCase(), times:a.times };
+  }
+  throw new Error('Maa 任务参数无效：代理刷图需要关卡和 1–100 次，自动战斗需要先导入作业。');
+}
+
+async function workspace(fn) {
+  const dir = await mkdtemp(path.join(tmpdir(), 'arkpilot-maa-'));
+  try { return await fn(dir); }
+  finally { await rm(dir, {recursive:true, force:true, maxRetries:3, retryDelay:150}); }
+}
+
+// Receives only internally constructed task types and parameters. The child owns
+// MaaCore and its callbacks; disconnecting the request also stops this worker.
+export async function runCore({ home, work, client = '', serial = '', type, params, prepare = false }, signal, progress = () => {}) {
+  signal.throwIfAborted();
+  if (!home) throw new Error('未找到 Maa 运行包。请设置 ARK_MAA_HOME 指向包含 MaaCore.dll 和 resource 的安装目录，再启动 ArkPilot。');
+  return new Promise((resolve, reject) => {
+    const child = spawn('powershell.exe', ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',worker],
+      {cwd:home, windowsHide:true, stdio:['pipe','pipe','pipe']});
+    let forceTimer, stderr = '', last = '', coreVersion = '', videoPhase = '';
+    const abort = () => {
+      child.stdin.end('stop\n');
+      forceTimer = setTimeout(() => child.kill(), 2500);
+    };
+    signal.addEventListener('abort', abort, {once:true});
+    child.stdin.on('error', () => {});
+    child.stderr.on('data', data => { stderr = (stderr + data.toString()).slice(-1000); });
+    const lines = createInterface({input:child.stdout});
+    lines.on('line', line => {
+      const split = line.indexOf('\t');
+      if (split < 0) return;
+      const tag = line.slice(0,split), content = line.slice(split+1);
+      if (tag === 'version') { coreVersion = content; progress('MaaCore ' + content); return; }
+      let info;
+      try { info = JSON.parse(content); } catch { return; }
+      let name = String(info.why || info.what || info.details?.task || info.subtask || info.taskchain || '').slice(0,120);
+      if (type === 'VideoRecognition' && Object.hasOwn(videoPhases,info.what)) {
+        videoPhase = videoPhases[info.what]; name = videoPhase;
+      }
+      if (info.what === 'CopilotAction') name = [info.details?.action,info.details?.target].filter(Boolean).join(' · ').slice(0,120);
+      if (info.what === 'StageDrops' && Number.isInteger(info.details?.stars)) name = '关卡结算 · ' + info.details.stars + ' 星';
+      if ([2,10001,20000,20001,20003].includes(Number(tag)) && name && name !== last) { last = name; progress(name); }
+    });
+    child.once('error', err => { reject(new Error('无法启动 Maa 工作进程。' + err.message)); });
+    child.once('close', code => {
+      clearTimeout(forceTimer);
+      signal.removeEventListener('abort', abort);
+      if (signal.aborted) return reject(signal.reason);
+      if (code !== 0) {
+        if (type === 'VideoRecognition' && videoPhase) return reject(new Error('视频已解码，Maa 未能完成' + videoPhase + '。'));
+        const err = new Error('Maa 未完成 ' + type + '。' + (stderr.trim() || '请检查运行包依赖、设备连接或素材。') + (last ? ' 最近事件：' + last : ''));
+        err.decoderFailed = type === 'VideoRecognition' && /VideoCapture|VIDEOIO|video_io/.test(stderr);
+        return reject(err);
+      }
+      resolve(coreVersion);
+    });
+    child.stdin.write(JSON.stringify({home, work, client, adb:adbPath(), serial, type, params:JSON.stringify(params), prepare}) + '\n');
+  });
+}
+
+export async function executeMaa(action, { home, device, serial, guide, formation, signal, progress, prepare = false }) {
+  const a = nativeAction(action, !!guide);
+  return workspace(async work => {
+    let params;
+    if (a.task === 'Fight') params = {stage:a.stage, times:a.times, medicine:0, stone:0, expiring_medicine:0, medicine_expire_days:0};
+    if (a.task === 'Award') params = {award:true, mail:false, recruit:false, orundum:false, mining:false, specialaccess:false};
+    if (a.task === 'Copilot') {
+      const filename = path.join(work, 'plan.json');
+      await writeFile(filename, JSON.stringify(checkPlan(guide)), 'utf8');
+      params = {filename, formation:formation === true, loop_times:1, use_sanity_potion:false};
+    }
+    const client = prepare ? '' : clients[await device.checkGame(signal)];
+    if (!prepare && !client) throw new Error('请先将明日方舟切到前台。');
+    const job = {home, work, type:a.task, params, client, serial, prepare};
+    if (prepare) return runCore(job, signal, progress);
+    const guard = new AbortController();
+    const combined = AbortSignal.any([signal,guard.signal]);
+    let timer;
+    const verifyForeground = async () => {
+      try {
+        await device.checkGame(combined);
+        if (!combined.aborted) timer = setTimeout(verifyForeground,1000);
+      } catch (error) { guard.abort(error); }
+    };
+    timer = setTimeout(verifyForeground,1000);
+    try { return await runCore(job,combined,progress); }
+    finally { clearTimeout(timer); guard.abort(); }
+  });
+}
+
+async function convertToMjpeg(filename, output, ext, signal) {
+  const local = await readFile(new URL('../.env',import.meta.url),'utf8').catch(() => '');
+  const ffmpeg = process.env.ARK_FFMPEG || parseEnv(local).ARK_FFMPEG || 'ffmpeg';
+  const demuxer = {mp4:'mov',mov:'mov',avi:'avi',mkv:'matroska',webm:'matroska'}[ext];
+  try {
+    await execute(ffmpeg,['-nostdin','-v','error','-protocol_whitelist','file,pipe','-f',demuxer,'-i',filename,'-map','0:v:0',
+      '-an','-sn','-dn','-vf','fps=12,scale=-2:min(720\\,ih)','-threads','2','-c:v','mjpeg','-q:v','4','-fs','1073741824',output],
+    {signal,windowsHide:true,timeout:300000,maxBuffer:256000});
+  } catch (error) {
+    signal.throwIfAborted();
+    throw new Error(error.code === 'ENOENT' ? '当前 Maa 无法直接解码，并且未找到 FFmpeg。可用 ARK_FFMPEG 指定解码器，或使用片段解读。' : 'FFmpeg 无法完整转换这段录像，可使用片段解读。');
+  }
+  if ((await stat(output)).size >= 1024**3 - 65536) throw new Error('转换后的录像过大，请截取单场战斗。');
+}
+
+export async function recognizeRecording(stream, ext, home, signal, progress = () => {}) {
+  if (!home) throw new Error('本地录像转作业需要 Maa 运行包。');
+  if (!['mp4','mkv','avi','mov','webm'].includes(ext)) throw new Error('请选择 MP4、MKV、AVI、MOV 或 WebM 战斗录像。');
+  return workspace(async work => {
+    const filename = path.join(work, 'battle.' + ext);
+    let bytes = 0;
+    const limit = new Transform({transform(chunk, encoding, done) {
+      bytes += chunk.length;
+      if (bytes > 1024 ** 3) return done(new Error('录像超过 1 GiB，请剪出单次战斗。'));
+      done(null, chunk);
+    }});
+    await pipeline(stream, limit, createWriteStream(filename, {flags:'wx'}), {signal});
+    if (!bytes) throw new Error('录像文件为空。');
+    const recognize = file => runCore({home, work, type:'VideoRecognition', params:{filename:file}},signal,progress);
+    try { await recognize(filename); }
+    catch (error) {
+      signal.throwIfAborted();
+      if (!error.decoderFailed) throw new Error(error.message + ' 可改用片段解读，或查找引用此 BV 的作业。');
+      progress('正在转换为 Maa 可读取的 MJPEG 录像');
+      const avi = path.join(work,'decoded.avi');
+      await convertToMjpeg(filename,avi,ext,signal);
+      try { await recognize(avi); }
+      catch (retry) { signal.throwIfAborted(); throw new Error(retry.message + ' 可改用片段解读，或查找引用此 BV 的作业。'); }
+    }
+    const output = path.join(work, 'cache', 'CombatRecord');
+    const files = await readdir(output).catch(() => []);
+    const result = files.find(f => f.endsWith('.json'));
+    if (!result) throw new Error('Maa 未生成战斗作业。请使用含编队画面、关卡名和完整战斗的原始录像，或用视觉模型解读片段。');
+    const plan = checkPlan(JSON.parse(await readFile(path.join(output,result),'utf8')));
+    if (plan.doc?.details) plan.doc.details = plan.doc.details.replaceAll(work,'临时录像');
+    return {plan, source:'Maa 录像识别草稿'};
+  });
+}
