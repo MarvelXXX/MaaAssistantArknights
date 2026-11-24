@@ -21,6 +21,7 @@ async function listen(server, t) {
 test('HTTP 对话经兼容模型返回点击，重新截图确认，并支持纯文本追问', async t => {
   const screens = [makeFrame(120, 0), makeFrame(0, 120)];
   let scene = 0;
+  let incompleteRequest;
   const inputs = [], requests = [];
   const device = { capture: async () => screens[scene], input: async action => { inputs.push(action); scene = 1; } };
   const model = await listen(http.createServer(async (req, res) => {
@@ -29,7 +30,12 @@ test('HTTP 对话经兼容模型返回点击，重新截图确认，并支持纯
     if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [{ id: 'test-model' }] }));
     if (req.url !== '/v1/chat/completions') { res.writeHead(404); return res.end('{}'); }
     const chunks = []; for await (const c of req) chunks.push(c);
-    requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+    const request = JSON.parse(Buffer.concat(chunks).toString());
+    if (!incompleteRequest) {
+      incompleteRequest = request;
+      return res.end('{"choices":[');
+    }
+    requests.push(request);
     const reply = { intent: requests.length === 3 ? 'inspect' : 'operate', goal: '打开任务界面',
       note: scene ? '已看到目标页面' : '点击入口', action: scene ? { type:'finish' } : { type:'tap', x:250, y:500 } };
     res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(reply) } }] }));
@@ -45,6 +51,7 @@ test('HTTP 对话经兼容模型返回点击，重新截图确认，并支持纯
   assert.equal(events.at(-1).outcome, 'finish');
   assert.deepEqual(inputs, [{ type:'tap', x:80, y:90 }]);
   assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0], incompleteRequest);
   assert.equal(requests[0].model, 'test-model');
   const [first, last] = requests.map(r => r.messages[1].content);
   assert.match(first[1].image_url.url, /^data:image\/jpeg;base64,/);

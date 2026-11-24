@@ -1,4 +1,7 @@
+import { setTimeout as delay } from 'node:timers/promises';
+
 const instructions = [
+  '国服终端当前布局中，曲谱在底栏左起第二个书册，乐章收录在曲谱右上，可通过日历切到按开启时间排列。先以当前画面核对入口。常驻活动地图上，普通与突袭可能共用节点，必要时切换难度核对评价。',
   '长任务用 earlierObservations 和 recentSteps 核对已经检查过的对象、读数及分界。已证实的结果沿用，继续检查剩余对象；跳过的点击与待验证的猜测保持待核。不因中段离开最近步骤就重走已经完成的地图。',
   '核对源石或合成玉时，把账号画面与国服公开奖励表分开。曲谱完成进度中的蓝色星形分数是关卡评价，白色故事图标是剧情收集，均不能换算源石。奖励进度中的干员、家具也不能折算。只有明确的源石图标或文字加数字才报告为源石余额。剿灭每周报酬和一次性歼灭数奖励分别核算。',
   '查询具体关卡首通或剿灭档位时使用 {"type":"stage_rewards","stage":"16-6"}，也可以用准确的中文关卡名。返回各难度的公开奖励，结合本账号同难度的通关状态判断。仅有公开配置时标记账号状态待核实。用户禁止花费源石或合成玉时，两种货币的消费、兑换和寻访确认界面都应退出。',
@@ -63,24 +66,32 @@ async function request(config, operation, payload, signal) {
   if (payload) headers['content-type'] = 'application/json';
   const timeout = AbortSignal.timeout(90000);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  try {
-    const result = await fetch(target, {
-      method: payload ? 'POST' : 'GET', headers, redirect: 'error',
-      body: payload && JSON.stringify(payload), signal: combined,
-    });
-    if (!result.ok) {
-      await result.body?.cancel();
-      const hint = { 400: '检查模型名称、输入模式和图像支持。', 401: '检查 API Key。', 403: '检查 Key 权限。', 404: '检查 URL、模型 ID 或手动填写模型。', 429: '请稍后重试或检查额度。' };
-      const error = new Error('模型服务返回 HTTP ' + result.status + '。' + (hint[result.status] || '请检查服务状态。'));
-      error.retryWithoutTools = !!payload?.tools && [400,422].includes(result.status);
-      throw error;
+  const options = { method: payload ? 'POST' : 'GET', headers, redirect: 'error',
+    body: payload && JSON.stringify(payload), signal: combined };
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const result = await fetch(target, options);
+      if (!result.ok) {
+        await result.body?.cancel();
+        const hint = { 400: '检查模型名称、输入模式和图像支持。', 401: '检查 API Key。', 403: '检查 Key 权限。', 404: '检查 URL、模型 ID 或手动填写模型。', 429: '请稍后重试或检查额度。' };
+        const error = new Error('模型服务返回 HTTP ' + result.status + '。' + (hint[result.status] || '请检查服务状态。'));
+        error.status = result.status;
+        error.retryWithoutTools = !!payload?.tools && [400,422].includes(result.status);
+        throw error;
+      }
+      return await result.json();
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (timeout.aborted) throw new Error('模型响应超时，请重试。');
+      const transient = [408,502,503,504].includes(error.status) || error instanceof SyntaxError ||
+        ['ECONNRESET','EPIPE','EAI_AGAIN','ETIMEDOUT','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_HEADERS_TIMEOUT'].includes(error.cause?.code);
+      if (!transient || attempt > 0) {
+        if (error.status) throw error;
+        if (error instanceof SyntaxError) throw new Error('模型接口返回了无效或不完整的 JSON 响应。');
+        throw new Error('无法读取模型响应。请检查服务地址及 OpenAI 兼容接口。');
+      }
+      await delay(650, undefined, { signal: combined });
     }
-    return await result.json();
-  } catch (error) {
-    signal?.throwIfAborted();
-    if (timeout.aborted) throw new Error('模型响应超时，请重试。');
-    if (error.message.startsWith('模型服务返回')) throw error;
-    throw new Error('无法读取模型响应。请检查服务地址及 OpenAI 兼容接口。');
   }
 }
 
