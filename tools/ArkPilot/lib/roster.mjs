@@ -4,7 +4,7 @@ import { checkPlan, resource, stageBoard } from './guides.mjs';
 
 let catalog;
 const roleAliases = {vanguard:'pioneer',guard:'warrior',defender:'tank',supporter:'support',specialist:'special'};
-async function characters() {
+export async function characters() {
   catalog ??= readFile(path.join(resource,'battle_data.json'),'utf8').then(s => {
     const {chars,ranges} = JSON.parse(s);
     return {ranges,characters:Object.entries(chars).filter(([id])=>id.startsWith('char_')).map(([id,c])=>({

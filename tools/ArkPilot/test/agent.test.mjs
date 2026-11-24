@@ -36,6 +36,23 @@ test('达到步数上限后仍读取最后一帧，但不继续操作', async ()
   assert.equal(f.inputs.length, 1);
   assert.equal(f.emitted.filter(e => e.type === 'frame').length, 2);
 });
+
+test('用户禁止花费两种货币时，从当前帧拦截确认按钮，仍可关闭或领取免费报酬', async () => {
+  const run = async (label, action, source='OCR') => {
+    const f = fixture([action,{type:'finish'}], {instruction:'不能消耗源石和合成玉',
+      observe: async () => ({...frame,anchors:[{...frame.anchors[0],label,source}]})});
+    await runAgent(f.params);
+    return f;
+  };
+  const tap = {type:'tap',id:3};
+  for (const [label,source] of [['是否消耗 600 合成玉进行寻访？','OCR'],['源石恢复提示','Maa']]) {
+    const f = await run(label,tap,source);
+    assert.equal(f.inputs.length,0);
+    assert.equal(f.emitted.at(-1).outcome,'stop');
+  }
+  assert.equal((await run('获得物资 至纯源石 ×1',tap)).inputs.length,1);
+  assert.equal((await run('是否消耗1至纯源石恢复理智？',{type:'back'})).inputs.length,1);
+});
 test('模型返回时若已取消，设备不会收到动作', async () => {
   const f = fixture([]);
   f.params.plan = async () => { f.abort.abort(); return answer({type:'back'}); };

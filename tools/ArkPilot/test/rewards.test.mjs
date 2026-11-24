@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateDecision } from '../lib/agent.mjs';
-import { matchRewards } from '../lib/rewards.mjs';
+import { matchRewards, matchSimulations } from '../lib/rewards.mjs';
 
 test('同编号保留不同难度的首通奖励，章节名片评价不参与计算', () => {
   const normal = {code:'16-6', name:'痛觉明灭', stageId:'main_16-05', difficulty:'NORMAL', diamondOnceDrop:1};
@@ -23,4 +23,12 @@ test('剿灭按歼灭数列出一次性合成玉，不计入周报酬', () => {
   const [row] = matchRewards('积水潮窟', {stage}, {camp_r_05:{breakLadders:tiers}});
   assert.equal(row.firstClearOriginite, 0);
   assert.deepEqual(row.firstKillOrundum, [{kills:400,amount:600}]);
+});
+
+test('被卡片遮住的干员名可以用悖论模拟关名反查', () => {
+  const operators = [{id:'saga',name:'嵯峨'},{id:'other',name:'没有模拟的干员'}];
+  const s = {charId:'saga',stageId:'mem_saga_1',name:'一心晦明',rewardItem:[{id:'4003',count:200}]};
+  const expected = [{stageId:'mem_saga_1',name:'一心晦明',operator:'嵯峨',firstClearOrundum:200}];
+  for (const query of ['嵯峨','一心晦明']) assert.deepEqual(matchSimulations(query,{s},operators),expected);
+  assert.deepEqual(matchSimulations('没有模拟的干员',{s},operators),[]);
 });

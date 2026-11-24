@@ -25,7 +25,7 @@ function tool(name,description,properties,required) {
   return {type:'function',function:{name,description,parameters:{type:'object',properties,required,additionalProperties:false}}};
 }
 const guideTools = [
-  tool('stage_rewards','按准确关卡编号或名称核查各难度的首通源石及剿灭首次击杀合成玉。',{stage:str('关卡编号或中文关卡名')},['stage']),
+  tool('stage_rewards','按关卡编号、名称或干员姓名核查首通源石、剿灭合成玉、悖论模拟及首通报酬。悖论排序卡片遮挡姓名时，点开读取模拟关名再核对干员。',{stage:str('关卡编号、中文关卡名或干员姓名')},['stage']),
   tool('search_web','联网搜索明日方舟网页、作业和攻略视频，返回链接及摘要。',
     {query:str('查找的主题或关键词'),stage:str('可选的准确关卡编号，例如 1-7')},['query']),
   tool('read_wiki','读取指定 PRTS Wiki 页面正文。',{title:str('页面名称'),section:str('可选的页面内关键词')},['title']),

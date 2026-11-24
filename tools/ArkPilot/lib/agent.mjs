@@ -5,6 +5,13 @@ import { nativeAction } from './maa.mjs';
 
 const endTypes = new Set(['finish', 'ask', 'stop']);
 const researchTools = new Set(['find_guide','load_guide','adapt_guide','search_web','read_wiki','analyze_video','stage_rewards']);
+const noPremiumSpend = /(?:禁止|不得|不能|不可|不要|不许|不准|不|别)(?:再|额外)?(?:消耗|花费|使用|花|用|动用)[^，。；;\n]{0,16}(?:源石|合成玉)|(?:源石|合成玉)[^，。；;\n]{0,12}(?:不能|不可|不许|禁止)(?:花|用|消耗)|(?:do not|don't|never)\s+(?:use|spend)\s+(?:any\s+)?(?:originite|orundum)/iu;
+function premiumConfirmation(frame) {
+  const labels = frame.anchors.map(anchor => anchor.label || '');
+  if (frame.anchors.some(anchor => anchor.source === 'Maa' && anchor.label === '源石恢复提示')) return true;
+  const text = labels.join('').replace(/\s/g, '');
+  return /(?:是否|确认|确定)(?:要|将|继续)?(?:花费|消耗|使用|用)[^。！？]{0,24}(?:源石|合成玉)|(?:是否|确认|确定)[^。！？]{0,12}源石[^。！？]{0,12}兑换[^。！？]{0,12}合成玉/u.test(text);
+}
 // An explicit request for a runnable adaptation is fulfilled by the attached plan.
 // Explanations, hypothetical questions and prohibitions stay with the planner.
 function wantsAdaptedPlan(text) {
@@ -85,6 +92,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
   observe = recognize, plan = decide, matches = stillMatches, pause = (ms, s) => delay(ms, undefined, { signal: s }) }) {
   const steps = [];
   const completedTasks = new Set();
+  const protectsCurrency = noPremiumSpend.test(instruction);
   const requestedAdaptation = wantsAdaptedPlan(instruction);
   let adaptation;
   let staleCount = 0, actionCount = 0, previousInput, identicalInputs = 0;
@@ -109,6 +117,11 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       else if (!adaptation.ready) decision = {...decision,note:adaptation.reason || adaptation.error || '未生成适配作业。',action:{type:'ask'}};
     }
     const { action, note, goal } = decision;
+    if (protectsCurrency && ['tap','swipe','maa'].includes(action.type) && premiumConfirmation(frame)) {
+      emit({type:'end', outcome:'stop', goal, count:actionCount,
+        note:'识别到源石恢复或货币消费确认界面，已按本轮禁用货币的要求停止输入。'});
+      return;
+    }
     if (endTypes.has(action.type)) {
       emit({ type: 'end', outcome: action.type, note, goal, count: actionCount });
       return;

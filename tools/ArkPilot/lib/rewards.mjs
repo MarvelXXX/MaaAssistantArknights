@@ -1,4 +1,5 @@
 import { publicJson } from './guides.mjs';
+import { characters } from './roster.mjs';
 
 const tableBase = 'https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/';
 const sourceBase = 'https://github.com/Kengxxiao/ArknightsGameData/blob/master/zh_CN/gamedata/excel/';
@@ -38,7 +39,22 @@ export async function stageRewards(query, signal) {
     const {campaigns} = await table('campaign_table', signal);
     return {rows: matchRewards(query, stages, campaigns), sources: sources.map(sourceLink)};
   }
+  if (!matches.length) {
+    const handbook = await table('handbook_info_table', signal);
+    const {characters: operators} = await characters();
+    return {rows: matchSimulations(query, handbook.handbookStageData, operators),
+      sources: ['stage_table','handbook_info_table'].map(sourceLink)};
+  }
   return {rows: matches, sources: sources.map(sourceLink)};
+}
+
+export function matchSimulations(query, stages, operators) {
+  const key = query.trim().toUpperCase();
+  const names = new Map(operators.map(operator => [operator.id,operator.name]));
+  return Object.values(stages).filter(stage =>
+    [stage.stageId, stage.name, stage.charId, names.get(stage.charId)].some(value => value?.toUpperCase() === key)
+  ).map(stage => ({stageId: stage.stageId, name: stage.name, operator: names.get(stage.charId) || stage.charId,
+    firstClearOrundum: stage.rewardItem.filter(item => item.id === '4003').reduce((n,item) => n + item.count,0)}));
 }
 
 function sourceLink(name) {
