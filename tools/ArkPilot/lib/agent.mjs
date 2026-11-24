@@ -4,6 +4,8 @@ import { decide } from './model.mjs';
 import { nativeAction } from './maa.mjs';
 
 const endTypes = new Set(['finish', 'ask', 'stop']);
+const researchTools = new Set(['find_guide','load_guide','adapt_guide','search_web','read_wiki','analyze_video']);
+const shortText = (v,max = 100) => typeof v === 'string' && v.trim() && v.length <= max;
 function integer(value, min, max) {
   if (!Number.isInteger(value) || value < min || value > max) throw new Error('模型返回的动作参数越界或缺失。');
   return value;
@@ -16,6 +18,19 @@ export function validateDecision(reply, frame, readOnly, vision, maaAvailable = 
   const a = reply.action;
   const decision = { intent: reply.intent, goal: reply.goal.slice(0, 300), note: reply.note.slice(0, 4000) };
   if (endTypes.has(a.type)) return { ...decision, action: { type: a.type } };
+  if (a.type === 'adapt_guide') return {...decision,action:{type:a.type}};
+  if (a.type === 'search_web' && shortText(a.query,160) && (a.stage == null || shortText(a.stage))) {
+    return {...decision,action:{type:a.type,query:a.query.trim(),stage:a.stage?.trim()}};
+  }
+  if (a.type === 'read_wiki' && shortText(a.title) && (a.section == null || shortText(a.section,60))) {
+    return {...decision,action:{type:a.type,title:a.title.trim(),section:a.section?.trim()}};
+  }
+  if (a.type === 'analyze_video' && /^BV[a-zA-Z0-9]{10}$/.test(a.bv)) {
+    const part = integer(a.part ?? 1,1,1000);
+    if ([a.start,a.end].some(n => n != null && (!Number.isFinite(n) || n < 0 || n > 86400)) ||
+        (a.end != null && a.end <= (a.start ?? 0))) throw new Error('视频片段时间无效。');
+    return {...decision,action:{type:a.type,bv:a.bv,part,start:a.start,end:a.end}};
+  }
   if (a.type === 'find_guide' && typeof a.stage === 'string' && a.stage.trim() && a.stage.length <= 100) {
     return {...decision, action:{type:a.type,stage:a.stage.trim()}};
   }
@@ -67,10 +82,13 @@ export async function runAgent({ config, device, instruction, history, readOnly,
   const recent = () => steps.length <= 18 ? steps : [...steps.slice(0, 3), ...steps.slice(-15)];
   for (let turn = 1; ; turn++) {
     signal.throwIfAborted();
-    emit({ type: 'status', text: '正在识别游戏画面', turn });
-    const frame = await observe(await device.capture(signal), signal);
+    let frame = {anchors:[],recognition:'仅查攻略，无游戏画面'};
+    if (device) {
+      emit({ type: 'status', text: '正在识别游戏画面', turn });
+      frame = await observe(await device.capture(signal), signal);
+    }
     signal.throwIfAborted();
-    emit({ type: 'frame', preview: frame.preview, width: frame.width, height: frame.height,
+    if (device) emit({ type: 'frame', preview: frame.preview, width: frame.width, height: frame.height,
       recognition: frame.recognition, anchors: frame.anchors, client: frame.client, turn });
     emit({ type: 'status', text: '等待模型判断', turn });
     const context = { instruction, conversation: history, turn, stepsSoFar: actionCount,
@@ -84,11 +102,13 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     }
     if (actionCount >= limit) throw new Error('已达到本次动作上限，目标尚未确认完成。');
     emit({ type: 'decision', action, note, goal, turn });
-    if (['find_guide','load_guide'].includes(action.type)) {
-      const result = await lookupGuide(action);
+    if (researchTools.has(action.type)) {
+      let result;
+      try { result = await lookupGuide(action); }
+      catch (err) { signal.throwIfAborted(); result = {error:err.message}; emit({type:'research_error',text:err.message}); }
       steps.push({turn,action,note,result});
       actionCount++;
-      emit({type:'applied',turn,action});
+      if (!result?.error) emit({type:'applied',turn,action});
       continue;
     }
     if (action.type === 'maa') {

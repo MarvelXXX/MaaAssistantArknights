@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const resource = process.env.ARK_MAA_RESOURCE || fileURLToPath(new URL('../../../resource/', import.meta.url));
+export const resource = process.env.ARK_MAA_RESOURCE || fileURLToPath(new URL('../../../resource/', import.meta.url));
 const station = 'https://prts.maa.plus/copilot/';
 const idPattern = /^[1-9]\d{0,9}$/;
 const biliHeaders = {Referer:'https://www.bilibili.com/', 'User-Agent':'Mozilla/5.0 ArkPilot'};
@@ -42,10 +42,17 @@ async function stageAliases(query) {
   const same = value => typeof value === 'string' && value.toLowerCase() === text.toLowerCase();
   const rows = (await overview).filter(s => [s.code,s.name,s.stageId,s.levelId].some(same));
   const row = rows.find(s => !s.stageId.includes('#')) || rows[0];
-  return { id: row?.stageId || text, aliases: [text, ...rows.flatMap(s => [s.stageId,s.code,s.name,s.levelId])].map(s => s.toLowerCase()) };
+  return { id: row?.stageId || text, row, aliases: [text, ...rows.flatMap(s => [s.stageId,s.code,s.name,s.levelId])].map(s => s.toLowerCase()) };
 }
 
-async function publicJson(url, signal, headers = {}) {
+export async function stageBoard(stage) {
+  const {row} = await stageAliases(stage);
+  if (!row) return null;
+  const map = JSON.parse(await readFile(path.join(resource,'Arknights-Tile-Pos',row.filename),'utf8'));
+  return {tiles:map.tiles.map(row=>row.map(tile=>tile.buildableType)),terrain:map.tiles.map(row=>row.map(tile=>tile.tileKey))};
+}
+
+export async function publicJson(url, signal, headers = {}) {
   const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(18000)]), headers, redirect:'error' })
     .catch(() => { signal.throwIfAborted(); throw new Error('攻略站连接失败，请稍后重试或导入本地文件。'); });
   if (!response.ok) { await response.body?.cancel(); throw new Error('攻略站返回 HTTP ' + response.status + '。'); }
@@ -59,7 +66,7 @@ async function publicJson(url, signal, headers = {}) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-export async function searchGuides(query, signal, videoCode = '') {
+export async function searchGuides(query, signal, videoCode = '', includeVideos = false) {
   if (videoCode && !/^BV[a-zA-Z0-9]{10}$/.test(videoCode)) throw new Error('视频编号无效。');
   const { id, aliases } = await stageAliases(query);
   const url = new URL('query', station);
@@ -71,7 +78,9 @@ export async function searchGuides(query, signal, videoCode = '') {
       const plan = JSON.parse(item.content);
       if (!idPattern.test(String(item.id)) || !aliases.includes(plan.stage_name.toLowerCase())) return [];
       if (videoCode && !(String(plan.doc?.details || '') + ' ' + String(plan.doc?.title || '')).includes(videoCode)) return [];
-      return [{ id: String(item.id), title: String(plan.doc?.title || plan.stage_name).slice(0,150) }];
+      const row = { id: String(item.id), title: String(plan.doc?.title || plan.stage_name).slice(0,150) };
+      if (includeVideos) row.videos = [...new Set(String(plan.doc?.details || '').match(/BV[a-zA-Z0-9]{10}/g) || [])].slice(0,3);
+      return [row];
     } catch { return []; }
   });
 }
@@ -140,9 +149,9 @@ export async function importGuide(value, signal) {
   const bv = input.match(/^(?:https?:\/\/(?:www\.|m\.)?bilibili\.com\/video\/)?(BV[a-zA-Z0-9]{10})(?:[/?#].*)?$/)?.[1];
   if (!bv) throw new Error('支持 maa://作业号、PRTS 单份作业链接、JSON、B 站 BV 号或完整视频链接。');
   const part = /^https?:/i.test(input) ? Number(new URL(input).searchParams.get('p') || 1) : 1;
-  const {detail} = await biliInfo(bv,part,signal);
+  const {detail,page} = await biliInfo(bv,part,signal);
   const notes = ('视频标题：' + detail.title + '\n简介：' + (detail.desc || '无')).slice(0,6000);
   const code = String(detail.desc || '').match(/(?:maa|prts):\/\/[1-9]\d{0,9}|https:\/\/prts\.plus\/(?:copilot|plan)\/[1-9]\d{0,9}/i)?.[0];
   const stageHint = String(detail.title).match(/(?:[A-Z]{1,5}(?:-[A-Z]+)?|\d{1,2})-\d{1,2}(?!\d)/i)?.[0] || '';
-  return { notes, source:'B 站视频简介', link:'https://www.bilibili.com/video/' + bv + '?p=' + part, code, video:{bv,part}, stageHint };
+  return { notes, source:'B 站视频简介', link:'https://www.bilibili.com/video/' + bv + '?p=' + part, code, video:{bv,part,duration:page.duration}, stageHint };
 }

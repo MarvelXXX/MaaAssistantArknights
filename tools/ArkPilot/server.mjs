@@ -4,12 +4,15 @@ import { pipeline } from 'node:stream/promises';
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import path from 'node:path';
 import { listDevices, connectDevice, selectDevice } from './lib/device.mjs';
 import { recognize } from './lib/vision.mjs';
-import { chooseModel, listModels, explainFrames } from './lib/model.mjs';
+import { chooseModel, listModels, explainFrames, proposeTeam } from './lib/model.mjs';
 import { runAgent } from './lib/agent.mjs';
 import { briefPlan, checkPlan, importGuide, openBiliMedia, searchGuides } from './lib/guides.mjs';
-import { executeMaa, maaHome, nativeAction, recognizeRecording } from './lib/maa.mjs';
+import { executeMaa, maaHome, nativeAction, recognizeRecording, scanRoster } from './lib/maa.mjs';
+import { adaptGuide, assess, normalizeRoster } from './lib/roster.mjs';
+import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
 
 const staticFiles = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
 staticFiles.set('/guides.js', ['guides.js', 'text/javascript']);
@@ -71,7 +74,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
         return res.end(file);
       }
-      if (req.method === 'GET' && req.url === '/api/health') return json(res, 200, { app: 'ArkPilot', guides:true, active });
+      if (req.method === 'GET' && req.url === '/api/health') return json(res, 200, { app: 'ArkPilot', guides:true, strategy:true, active });
       const media = req.method === 'GET' && req.url.match(/^\/api\/guides\/media\/(BV[a-zA-Z0-9]{10})\/(\d{1,4})$/);
       if (media) {
         const src = await openBiliMedia(media[1], Number(media[2]), signal, req.headers.range);
@@ -99,6 +102,28 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
       }
       const data = await body(req, req.url === '/api/guides/frames' ? 6 * 1024 * 1024 : undefined);
       switch (req.url) {
+        case '/api/roster/maa-file': {
+          const home = await getHome();
+          const input = home && await readFile(path.join(home,'data','OperBoxData.json'),'utf8').catch(()=>null);
+          if (!input) throw new Error('未找到 Maa 保存的名册，可从文件导入或用 Maa 扫描。');
+          const raw = JSON.parse(input.replace(/^\uFEFF/,''));
+          return json(res,200,{...await normalizeRoster(raw),syncTime:typeof raw.syncTime === 'string' ? raw.syncTime.slice(0,50) : null});
+        }
+        case '/api/roster/import': return json(res,200,await normalizeRoster(data));
+        case '/api/roster/scan': {
+          if (active) return json(res,409,{error:'有任务正在运行。'});
+          if (data.readOnly !== false) throw new Error('Maa 扫描会翻动游戏干员列表，请切换到允许操作。');
+          active = true;
+          try {
+            const device = await getDevice(data.serial,signal);
+            return json(res,200,await normalizeRoster(await scanRoster({device,serial:data.serial,home:await getHome(),signal})));
+          } finally { active = false; }
+        }
+        case '/api/guides/adapt': {
+          const config = modelConfig(data);
+          return json(res,200,await adaptGuide(checkPlan(data.guide),await normalizeRoster(data.roster),
+            String(data.notes || '').slice(0,6000),m=>proposeTeam(config,m,signal)));
+        }
         case '/api/guides/online-video': {
           if (active) return json(res,409,{error:'有任务正在运行。'});
           active = true;
@@ -135,23 +160,30 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         case '/api/run': break;
         default: return json(res, 404, { error: '未知接口。' });
       }
-      if (active) return json(res, 409, { error: '已有指令在执行，请在原对话中停止或等待结束。' });
       let guide = data.guide == null ? null : checkPlan(data.guide);
+      const roster = data.roster ? await normalizeRoster(data.roster) : null;
+      let adaptationBlocked = false;
+      let formation = data.formation === true;
+      const researchOnly = data.researchOnly === true;
       const direct = data.native ? nativeAction(data.native,!!guide) : null;
-      if (direct && data.readOnly === true) throw new Error('当前为只读分析，请切换到允许操作再运行 Maa。');
+      if (direct && (data.readOnly === true || researchOnly)) throw new Error('当前为只读分析，请切换到允许操作再运行 Maa。');
       const config = direct ? null : modelConfig(data);
       const instruction = data.instruction?.trim();
       if (!instruction || instruction.length > 4000) throw new Error('指令长度应在 1 至 4000 字之间。');
       const limit = data.limit ?? 24;
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('步数上限应为 1 至 100。');
+      if (active) return json(res, 409, { error: '已有指令在执行，请在原对话中停止或等待结束。' });
       active = true;
       try {
-        const device = await getDevice(data.serial, signal);
+        const device = researchOnly ? null : await getDevice(data.serial, signal);
         const home = await getHome();
         if (config) config.model = await chooseModel(config, signal);
         const emit = eventStream(res);
-        const runNative = a => native(a, {home,device,serial:data.serial,guide,formation:data.formation,signal,
-          progress:text => emit({type:'core',text})});
+        const runNative = a => {
+          if (a.task === 'Copilot' && (adaptationBlocked || roster && assess(guide,roster).some(s=>
+            !s.choices.some(c=>c.status === '持有且满足已知要求')))) throw new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。');
+          return native(a, {home,device,serial:data.serial,guide,formation,signal,progress:text=>emit({type:'core',text})});
+        };
         if (direct) {
           emit({type:'decision',action:direct,goal:instruction,note:'正在运行 Maa 任务'});
           await runNative(direct);
@@ -160,14 +192,45 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
           return res.end();
         }
         emit({ type: 'model', model: config.model });
-        const guidance = {notes:typeof data.notes === 'string' ? data.notes.slice(0,6000) : '', plan:briefPlan(guide)};
+        const guidance = {notes:typeof data.notes === 'string' ? data.notes.slice(0,6000) : '',plan:briefPlan(guide),
+          roster:roster && {complete:roster.complete,operators:roster.operators.map(({name,owned,role,elite,level})=>({name,owned,role,elite,level}))}};
         const candidates = new Set(instruction.match(/\b[1-9]\d{0,9}\b/g) || []);
         if (Array.isArray(data.recentSearch)) {
           guidance.candidates = data.recentSearch.slice(0,20).filter(r => typeof r?.id === 'string' && /^[1-9]\d{0,9}$/.test(r.id))
             .map(r => ({id:r.id,title:String(r.title || '').slice(0,150)}));
           for (const r of guidance.candidates) candidates.add(r.id);
         }
+        const cache = new Map();
+        const excerpts = [];
         const lookupGuide = async a => {
+          const key = JSON.stringify(a);
+          if (cache.has(key)) return cache.get(key);
+          if (a.type === 'search_web') {
+            const found = await searchWeb(a.query,a.stage,signal);
+            for (const r of found.results) if (r.id) candidates.add(r.id);
+            emit({type:'sources',results:found.results}); cache.set(key,found); return found;
+          }
+          if (a.type === 'read_wiki') {
+            const page = await readWiki(a.title,a.section,signal);
+            excerpts.push({title:page.title,url:page.url,text:page.excerpt});
+            emit({type:'sources',results:[page]}); cache.set(key,page); return page;
+          }
+          if (a.type === 'analyze_video') {
+            const clip = await analyzeVideo(config,a,signal);
+            guidance.notes = (clip.url+'\n'+clip.notes+'\n'+guidance.notes).slice(0,6000);
+            emit({type:'video_notes',clip,notes:guidance.notes}); cache.set(key,clip); return clip;
+          }
+          if (a.type === 'adapt_guide') {
+            adaptationBlocked = true;
+            if (!roster || !guide) throw new Error('适配需要已导入的作业和当前账号的干员名册。');
+            const result = await adaptGuide(guide,roster,[instruction,guidance.notes].join('\n'),
+              m=>proposeTeam(config,{...m,wiki:excerpts.slice(-3)},signal));
+            if (!result.ready) return {reason:result.reason,assessment:result.assessment};
+            guide = result.plan; adaptationBlocked = false; formation = true; guidance.plan = briefPlan(guide);
+            guidance.notes = (result.reason+'\n'+guidance.notes).slice(0,6000);
+            emit({type:'guide_loaded',...result,notes:guidance.notes});
+            return {reason:result.reason,changes:result.changes,plan:guidance.plan};
+          }
           if (a.type === 'find_guide') {
             const results = await searchGuides(a.stage,signal);
             for (const r of results) candidates.add(r.id);
@@ -177,12 +240,13 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
           if (!candidates.has(a.id)) throw new Error('请先搜索关卡，或在指令里给出具体作业号。');
           const material = await importGuide(a.id,signal);
           guide = material.plan;
+          formation = data.formation === true;
           guidance.plan = briefPlan(guide);
           emit({type:'guide_loaded',...material});
           return guidance.plan;
         };
         await runAgent({ config, device, instruction, history: historyFrom(data.history),
-          readOnly: data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:home ? runNative : null });
+          readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home ? runNative : null });
         res.end();
       } finally { active = false; }
     } catch (error) {

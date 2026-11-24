@@ -45,7 +45,7 @@ async function workspace(fn) {
 
 // Receives only internally constructed task types and parameters. The child owns
 // MaaCore and its callbacks; disconnecting the request also stops this worker.
-export async function runCore({ home, work, client = '', serial = '', type, params, prepare = false }, signal, progress = () => {}) {
+export async function runCore({ home, work, client = '', serial = '', type, params, prepare = false, onBox }, signal, progress = () => {}) {
   signal.throwIfAborted();
   if (!home) throw new Error('未找到 Maa 运行包。请设置 ARK_MAA_HOME 指向包含 MaaCore.dll 和 resource 的安装目录，再启动 ArkPilot。');
   return new Promise((resolve, reject) => {
@@ -67,6 +67,7 @@ export async function runCore({ home, work, client = '', serial = '', type, para
       if (tag === 'version') { coreVersion = content; progress('MaaCore ' + content); return; }
       let info;
       try { info = JSON.parse(content); } catch { return; }
+      if (type === 'OperBox' && info.what === 'OperBoxInfo' && info.details?.done === true) onBox?.(info.details.own_opers);
       let name = String(info.why || info.what || info.details?.task || info.subtask || info.taskchain || '').slice(0,120);
       if (type === 'VideoRecognition' && Object.hasOwn(videoPhases,info.what)) {
         videoPhase = videoPhases[info.what]; name = videoPhase;
@@ -92,6 +93,32 @@ export async function runCore({ home, work, client = '', serial = '', type, para
   });
 }
 
+async function connectedCore(job, device, signal, progress) {
+  const client = clients[await device.checkGame(signal)];
+  if (!client) throw new Error('请先将明日方舟切到前台。');
+  const guard = new AbortController();
+  const combined = AbortSignal.any([signal,guard.signal]);
+  let timer;
+  const verify = async () => {
+    try {
+      await device.checkGame(combined);
+      if (!combined.aborted) timer = setTimeout(verify,1000);
+    } catch (error) { guard.abort(error); }
+  };
+  timer = setTimeout(verify,1000);
+  try { return await runCore({...job,client},combined,progress); }
+  finally { clearTimeout(timer); guard.abort(); }
+}
+
+export async function scanRoster({home, device, serial, signal}) {
+  return workspace(async work => {
+    let rows;
+    await connectedCore({home,work,serial,type:'OperBox',params:{},onBox:value => { rows = value; }},device,signal);
+    if (!Array.isArray(rows) || !rows.length) throw new Error('未读到干员，请先打开无筛选的干员列表再扫描。');
+    return {own_opers:rows};
+  });
+}
+
 export async function executeMaa(action, { home, device, serial, guide, formation, signal, progress, prepare = false }) {
   const a = nativeAction(action, !!guide);
   return workspace(async work => {
@@ -103,28 +130,18 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
       await writeFile(filename, JSON.stringify(checkPlan(guide)), 'utf8');
       params = {filename, formation:formation === true, loop_times:1, use_sanity_potion:false};
     }
-    const client = prepare ? '' : clients[await device.checkGame(signal)];
-    if (!prepare && !client) throw new Error('请先将明日方舟切到前台。');
-    const job = {home, work, type:a.task, params, client, serial, prepare};
+    const job = {home, work, type:a.task, params, serial, prepare};
     if (prepare) return runCore(job, signal, progress);
-    const guard = new AbortController();
-    const combined = AbortSignal.any([signal,guard.signal]);
-    let timer;
-    const verifyForeground = async () => {
-      try {
-        await device.checkGame(combined);
-        if (!combined.aborted) timer = setTimeout(verifyForeground,1000);
-      } catch (error) { guard.abort(error); }
-    };
-    timer = setTimeout(verifyForeground,1000);
-    try { return await runCore(job,combined,progress); }
-    finally { clearTimeout(timer); guard.abort(); }
+    return connectedCore(job,device,signal,progress);
   });
 }
 
-async function convertToMjpeg(filename, output, ext, signal) {
+export async function ffmpegPath() {
   const local = await readFile(new URL('../.env',import.meta.url),'utf8').catch(() => '');
-  const ffmpeg = process.env.ARK_FFMPEG || parseEnv(local).ARK_FFMPEG || 'ffmpeg';
+  return process.env.ARK_FFMPEG || parseEnv(local).ARK_FFMPEG || 'ffmpeg';
+}
+async function convertToMjpeg(filename, output, ext, signal) {
+  const ffmpeg = await ffmpegPath();
   const demuxer = {mp4:'mov',mov:'mov',avi:'avi',mkv:'matroska',webm:'matroska'}[ext];
   try {
     await execute(ffmpeg,['-nostdin','-v','error','-protocol_whitelist','file,pipe','-f',demuxer,'-i',filename,'-map','0:v:0',

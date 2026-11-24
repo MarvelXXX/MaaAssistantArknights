@@ -33,7 +33,7 @@
         <button id="attachment" class="quiet" type="button" hidden></button>
         <label for="instruction" class="sr-only">游戏指令</label>
         <textarea id="instruction" maxlength="4000" placeholder="输入游戏指令，或继续追问…" rows="3" required></textarea>
-        <div class="compose-bar"><label class="mode"><span class="mode-icon" aria-hidden="true">⌁</span><select id="mode" aria-label="执行模式"><option value="operate">允许操作</option><option value="inspect">只读分析</option></select></label>
+        <div class="compose-bar"><label class="mode"><span class="mode-icon" aria-hidden="true">⌁</span><select id="mode" aria-label="执行模式"><option value="operate">允许操作</option><option value="inspect">只读分析</option><option value="research">仅查攻略（无需设备）</option></select></label>
           <div><button type="button" id="stop" class="stop" hidden>停止</button><button type="submit" id="send" class="primary">发送 <span aria-hidden="true">↑</span></button></div>
         </div>
       </form>
@@ -52,7 +52,17 @@
       <div class="modal-head"><h2 id="libraryTitle">攻略与 Maa</h2><button id="closeLibrary" class="close" aria-label="关闭攻略面板">×</button></div>
       <p id="coreStatus" class="hint"></p>
       <label for="libraryType">选择功能</label>
-      <select id="libraryType"><option value="plan">战斗作业</option><option value="video">视频攻略</option><option value="daily">日常与代理</option></select>
+      <select id="libraryType"><option value="plan">战斗作业</option><option value="roster">我的干员</option><option value="video">视频攻略</option><option value="daily">日常与代理</option></select>
+      <section id="rosterSection" hidden>
+        <label for="accountProfile">当前账号名册</label>
+        <div class="inline"><select id="accountProfile"></select><input id="profileName" maxlength="48" placeholder="新名册名称" aria-label="新名册名称"></div>
+        <p id="accountInfo" class="hint"></p>
+        <label for="boxFile">导入 Maa 的 OperBoxData.json 或 ArkPilot 名册</label><input id="boxFile" type="file" accept=".json,application/json">
+        <label for="boxData">手动录入或修正名册</label><textarea id="boxData" rows="5" placeholder='{"operators":[{"name":"克洛丝","elite":1,"level":55,"skill_level":7},{"name":"能天使","owned":false}]}'></textarea>
+        <label class="check"><input id="boxComplete" type="checkbox">我已核对完整名册，未列出的干员均未持有</label>
+        <p class="hint">扫描前打开游戏的干员列表并清除筛选。扫描会翻页，扫描后可补填技能专精。名册保存在本浏览器，切换游戏账号后请在此选择对应名册。</p>
+        <div class="library-actions"><button id="maaBoxFile" class="outline">读取 Maa 已保存的名册</button><button id="scanBox" class="outline">用 Maa 扫描当前账号</button><button id="saveBox" class="outline">保存名册</button></div>
+      </section>
       <section id="planSection">
         <label for="stageSearch">按关卡查找 PRTS 作业</label>
         <div class="inline"><input id="stageSearch" placeholder="例如 1-7"><button id="searchPlans" class="outline">搜索</button></div>
@@ -83,6 +93,8 @@
       <section id="planPreview" hidden>
         <h3 id="planTitle"></h3><p id="planMeta" class="hint"></p><p id="operators"></p>
         <details><summary id="actionSummary">作业动作</summary><ol id="planActions"></ol></details>
+        <div class="library-actions"><button id="adaptPlan" class="outline">按我的干员适配部署</button><button id="undoAdapt" class="quiet" hidden>恢复原作业</button></div>
+        <p id="adaptSummary" class="hint"></p>
         <label class="check"><input id="formation" type="checkbox">使用 Maa 自动编队</label>
         <p class="hint">执行前请打开此作业对应的关卡准备页，核对难度和编队。</p>
         <div class="library-actions"><button id="runPlan" class="primary">执行此作业</button><button id="checkPlan" class="outline">用 Maa 检查兼容性</button><button id="savePlan" class="quiet">导出 JSON</button></div>

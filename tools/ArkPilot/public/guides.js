@@ -54,6 +54,28 @@ async function clipFrames(video, signal) {
 
 export function setupGuides({post,events,getConfig,runDirect}) {
   let plan = null, source = '', mediaUrl = '', pending = null, relatedVideo = null, onlineVideo = null, recentSearch = [];
+  let beforeAdapt = null;
+  const profiles = new Map();
+  try { for (const [name,value] of JSON.parse(localStorage.getItem('arkpilot.rosters') || '[]')) profiles.set(name,value); } catch {}
+  function profileMenu(name) {
+    $('accountProfile').replaceChildren(new Option('未选择名册',''),...[...profiles.keys()].map(n=>new Option(n,n)));
+    $('accountProfile').value = name && profiles.has(name) ? name : '';
+    const profile = profiles.get($('accountProfile').value);
+    $('accountInfo').textContent = profile ? profile.roster.operators.length+' 条记录 · '+profile.updated : '可扫描、导入或手动填写后保存。';
+    $('boxData').value = profile ? JSON.stringify({operators:profile.roster.operators},null,2) : '';
+    $('boxComplete').checked = profile?.roster.complete === true;
+    $('profileName').value = '';
+    localStorage.setItem('arkpilot.activeRoster',$('accountProfile').value);
+  }
+  profileMenu(localStorage.getItem('arkpilot.activeRoster'));
+  $('accountProfile').onchange = () => profileMenu($('accountProfile').value);
+  const currentRoster = () => profiles.get($('accountProfile').value)?.roster || null;
+  function saveRoster(data,name) {
+    const operators = data.operators.map(({tokens,position,role,rarity,branch,rangeIds,...record})=>record);
+    profiles.set(name,{roster:{complete:data.complete,operators},updated:new Date().toLocaleString()});
+    localStorage.setItem('arkpilot.rosters',JSON.stringify([...profiles]));
+    profileMenu(name);
+  }
   const dialog = $('library');
   const status = (text, error = false) => { $('guideStatus').textContent = text; $('guideStatus').classList.toggle('error-text',error); };
   const request = async (route,data,signal) => (await post(route,data,signal)).json();
@@ -63,6 +85,12 @@ export function setupGuides({post,events,getConfig,runDirect}) {
     $('attachment').textContent = '已附攻略 · ' + label;
   }
   function render(result) {
+    if (result.ready && result.plan) beforeAdapt ??= plan && {plan,source,notes:$('guideNotes').value,formation:$('formation').checked};
+    else beforeAdapt = null;
+    $('undoAdapt').hidden = !beforeAdapt;
+    $('adaptSummary').textContent = result.ready ? [result.reason,...(result.changes || [])].join(' · ') : '';
+    if (result.ready) $('formation').checked = true;
+    else if (typeof result.formation === 'boolean') $('formation').checked = result.formation;
     plan = result.plan || null; source = result.source || '';
     $('guideNotes').value = (result.notes || plan?.doc?.details || '').slice(0,6000);
     const links = new Map();
@@ -98,10 +126,11 @@ export function setupGuides({post,events,getConfig,runDirect}) {
   }
   function showSections() {
     const type = $('libraryType').value;
-    for (const tab of ['plan','video','daily']) $(tab+'Section').hidden = tab !== type;
-    $('referenceSection').hidden = type === 'daily';
-    $('onlineSource').hidden = type === 'daily';
-    $('planPreview').hidden = !plan || type === 'daily';
+    for (const tab of ['plan','video','daily','roster']) $(tab+'Section').hidden = tab !== type;
+    const references = type === 'plan' || type === 'video';
+    $('referenceSection').hidden = !references;
+    $('onlineSource').hidden = !references;
+    $('planPreview').hidden = !plan || !references;
   }
   async function job(label, fn) {
     if (pending) return;
@@ -123,6 +152,38 @@ export function setupGuides({post,events,getConfig,runDirect}) {
   }
   $('libraryBtn').onclick = $('attachment').onclick = open;
   $('libraryType').onchange = showSections;
+  const profileName = () => $('profileName').value.trim() || $('accountProfile').value || '我的账号';
+  $('maaBoxFile').onclick = () => job('正在读取 Maa 的本机名册…',async signal=>{
+    const roster = await request('roster/maa-file',{},signal);
+    saveRoster(roster,profileName()); status('已导入 '+roster.operators.length+' 条记录'+(roster.syncTime ? '，Maa 同步时间 '+roster.syncTime : '')+'。');
+  });
+  $('saveBox').onclick = () => job('正在核对干员…',async signal=>{
+    const raw = JSON.parse($('boxData').value);
+    saveRoster(await request('roster/import',{...raw,complete:$('boxComplete').checked},signal),profileName());
+    status('已保存名册，可在战斗作业中适配部署。');
+  });
+  $('boxFile').onchange = () => job('正在读取名册…',async signal=>{
+    const file = $('boxFile').files[0]; if (!file) return;
+    $('boxFile').value = '';
+    if (file.size > 1024**2) throw new Error('请选择 1 MiB 以内的名册 JSON。');
+    const raw = JSON.parse(await file.text());
+    const roster = await request('roster/import',{operators:raw.operators ?? raw.own_opers,complete:raw.complete === true},signal);
+    saveRoster(roster,profileName()); status('已导入名册。');
+  });
+  $('scanBox').onclick = () => job('Maa 正在翻页识别干员…',async signal=>{
+    const roster = await request('roster/scan',{serial:$('device').value,readOnly:$('mode').value !== 'operate'},signal);
+    const old = new Map((profiles.get(profileName())?.roster.operators || []).map(o=>[o.id,o]));
+    roster.operators = roster.operators.map(o=>({...old.get(o.id),...o}));
+    saveRoster(roster,profileName()); status('已保存扫描结果，可补填技能资料并核对名册完整性。');
+  });
+  $('adaptPlan').onclick = () => job('正在核对练度并生成替补部署…',async signal=>{
+    if (!currentRoster()) { $('libraryType').value='roster'; showSections(); throw new Error('请先扫描或导入当前账号的干员。'); }
+    const notes = $('guideNotes').value;
+    const result = await request('guides/adapt',{...getConfig(),guide:plan,roster:currentRoster(),notes},signal);
+    if (!result.ready) { status(result.reason,true); return; }
+    render({...result,notes:(result.reason+'\n'+notes).slice(0,6000)}); status('已更新待执行作业，可查看部署步骤或恢复原作业。');
+  });
+  $('undoAdapt').onclick = () => { if (beforeAdapt) render(beforeAdapt); status('已恢复原作业。'); };
   $('cancelGuide').onclick = () => pending?.abort();
   dialog.onclose = () => pending?.abort();
   $('useGuide').onclick = $('closeLibrary').onclick = () => dialog.close();
@@ -173,7 +234,7 @@ export function setupGuides({post,events,getConfig,runDirect}) {
     a.download = plan.stage_name.replace(/[^\w.-]/g,'_') + '.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href),1000);
   };
   function direct(a,label) {
-    if ($('mode').value === 'inspect') { status('当前为只读分析，请先在指令台切换到允许操作。',true); return; }
+    if ($('mode').value !== 'operate') { status('请先在指令台切换到允许操作。',true); return; }
     dialog.close(); runDirect(a,label);
   }
   $('runPlan').onclick = () => direct({task:'Copilot'},'执行已选作业 ' + plan.stage_name);
@@ -232,5 +293,6 @@ export function setupGuides({post,events,getConfig,runDirect}) {
     if (!done) throw new Error('未收到识别结果。');
     status('已生成作业草稿，请核对干员、坐标与触发条件。');
   });
-  return {render, showResults, current:() => ({guide:plan,notes:$('guideNotes').value.trim(),recentSearch,formation:$('formation').checked})};
+  return {render, showResults, attachNotes:notes=>{ $('guideNotes').value=notes; attachment(); },
+    current:() => ({guide:plan,roster:currentRoster(),notes:$('guideNotes').value.trim(),recentSearch,formation:$('formation').checked})};
 }

@@ -8,11 +8,11 @@ let controller = null;
 let previewController = null;
 let deviceGeneration = 0;
 const history = [];
-$('mode').value = saved.readOnly ? 'inspect' : 'operate';
+$('mode').value = saved.researchOnly ? 'research' : saved.readOnly ? 'inspect' : 'operate';
 function persist() {
   // The API key and conversational content only live in this tab's memory.
   saved = { url: config.url, model: config.model, vision: config.vision, limit: config.limit,
-    serial: $('device').value || saved.serial, readOnly: $('mode').value === 'inspect' };
+    serial: $('device').value || saved.serial, readOnly: $('mode').value === 'inspect',researchOnly:$('mode').value === 'research' };
   try { localStorage.setItem(storeKey, JSON.stringify(saved)); } catch {}
 }
 function modelStatus() {
@@ -93,6 +93,7 @@ function showFrame(frame) {
 }
 async function refreshPreview() {
   previewController?.abort();
+  if ($('mode').value === 'research') { noScreen('仅查攻略模式可在模拟器关闭时使用。'); return; }
   const serial = $('device').value;
   if (!serial) { noScreen('在连接设置中添加设备，或检查 ADB 调试是否开启。'); return; }
   const local = new AbortController();
@@ -131,7 +132,7 @@ $('connect').onclick = () => {
   if (address) scanDevices(address); else configMessage('请先填写 ADB 连接地址。', true);
 };
 $('device').onchange = () => { persist(); noScreen('正在读取设备…'); refreshPreview(); };
-$('mode').onchange = persist;
+$('mode').onchange = () => { persist(); refreshPreview(); };
 $('refreshFrame').onclick = refreshPreview;
 
 function message(role, text, error = false) {
@@ -157,6 +158,10 @@ function actionName(a) {
     case 'maa': return 'Maa · ' + a.task + (a.stage ? ' ' + a.stage + ' × ' + a.times : '');
     case 'find_guide': return '搜索 ' + a.stage + ' 作业';
     case 'load_guide': return '导入作业 #' + a.id;
+    case 'search_web': return '联网搜索 · '+a.query;
+    case 'read_wiki': return '阅读 PRTS Wiki · '+a.title;
+    case 'analyze_video': return '解读视频画面 · '+a.bv+' P'+a.part;
+    case 'adapt_guide': return '按名册适配部署';
     case 'tap': return '点击 (' + a.x + ', ' + a.y + ')';
     case 'swipe': return '滑动 (' + a.x + ', ' + a.y + ') → (' + a.x2 + ', ' + a.y2 + ')';
     case 'back': return '返回';
@@ -182,7 +187,8 @@ async function submit(event, native = null, label = '') {
   if (!instruction || controller) return;
   if (!native && !config.url) { openSettings('填写模型服务地址后即可发送这条指令。'); return; }
   const serial = $('device').value;
-  if (!serial) { openSettings('请先连接设备。'); return; }
+  const researchOnly = $('mode').value === 'research';
+  if (!serial && !researchOnly) { openSettings('操作游戏需要连接设备，查攻略可选择“仅查攻略”。'); return; }
   const local = new AbortController(); controller = local;
   previewController?.abort();
   const previous = history.filter(m => m.serial === serial).slice(-12).map(({ role, text }) => ({ role, text }));
@@ -193,10 +199,21 @@ async function submit(event, native = null, label = '') {
   let end = false, step, applied = [];
   try {
     const res = await post('run', { ...(native ? {} : config), ...guides.current(), native, serial, instruction, history: previous,
-      readOnly: $('mode').value === 'inspect' }, local.signal);
+      researchOnly,readOnly: $('mode').value !== 'operate' }, local.signal);
     for await (const e of events(res)) {
       if (e.type === 'frame') showFrame(e);
       else if (e.type === 'guide_loaded') guides.render(e);
+      else if (e.type === 'sources' || e.type === 'video_notes') {
+        const hits = e.results || [{title:e.clip.bv+' P'+e.clip.part+' · '+e.clip.timestamps.length+' 帧',url:e.clip.url}];
+        if (e.notes) guides.attachNotes(e.notes);
+        for (const hit of hits) {
+          if (!/^https?:\/\//.test(hit.url)) continue;
+          const li = document.createElement('li'), a = document.createElement('a');
+          a.className='guide-link'; a.href=hit.url; a.target='_blank'; a.rel='noopener noreferrer';
+          a.textContent=(hit.source ? hit.source+' · ' : '')+hit.title; li.append(a); $('steps').append(li);
+        }
+      }
+      else if (e.type === 'research_error') { if (step) step.textContent = e.text; else addStep(e.text); }
       else if (e.type === 'guide_search') { $('stageSearch').value = e.stage; $('stageSearch').oninput(); guides.showResults(e.results); }
       else if (e.type === 'model') $('modelLight').title = e.model;
       else if (e.type === 'core') { reply.textContent = 'Maa · ' + e.text; if (step) step.textContent = reply.textContent; }
