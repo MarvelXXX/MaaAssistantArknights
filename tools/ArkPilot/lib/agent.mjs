@@ -110,6 +110,12 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     emit({ type: 'status', text: '等待模型判断', turn });
     const context = { instruction, conversation: history, turn, stepsSoFar: actionCount,
       remainingActions: limit - actionCount, readOnly, recentSteps: recent(), maaAvailable: !!runNative, guidance };
+    if (steps.length > 18) {
+      context.earlierObservations = steps.slice(3,-15).map(step => ({
+        turn: step.turn, action: step.action.type, note: step.note.slice(0,320),
+        result: typeof step.result === 'string' ? step.result : step.result?.error || '已查资料',
+      }));
+    }
     let decision = validateDecision(await plan(config, context, frame, signal), frame, readOnly, config.vision, !!runNative, !!guidance?.plan);
     signal.throwIfAborted();
     if (decision.action.type === 'finish' && requestedAdaptation && guidance?.roster && guidance.plan) {

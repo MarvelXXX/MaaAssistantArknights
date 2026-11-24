@@ -59,3 +59,17 @@ test('模型返回时若已取消，设备不会收到动作', async () => {
   await assert.rejects(runAgent(f.params), {name:'AbortError'});
   assert.equal(f.inputs.length, 0);
 });
+
+test('长巡查的中段读数在最近步骤滚动后仍送给模型', async () => {
+  let lastContext;
+  const f = fixture([], {limit:24, plan: async (_config,context) => {
+    lastContext = context;
+    const decision = answer(context.turn > 24 ? {type:'finish'} : {type:'wait',ms:300});
+    decision.note = '第 ' + context.turn + ' 张地图已记录';
+    return decision;
+  }});
+  await runAgent(f.params);
+  assert.equal(lastContext.recentSteps.length,18);
+  assert.deepEqual(lastContext.earlierObservations.map(s=>s.turn),[4,5,6,7,8,9]);
+  assert.equal(lastContext.earlierObservations[3].note,'第 7 张地图已记录');
+});
