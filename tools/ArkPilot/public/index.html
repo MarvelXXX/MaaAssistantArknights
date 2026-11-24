@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#121a20">
+  <title>ArkPilot · 明日方舟指令台</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="logo" aria-hidden="true"></span>ArkPilot</div>
+    <span class="product">明日方舟助手</span>
+    <div class="head-actions"><span class="light" id="modelLight">模型待配置</span><button id="settingsBtn" class="outline">连接设置</button></div>
+  </header>
+  <main>
+    <section class="chat pane" aria-labelledby="chatTitle">
+      <div class="pane-head"><h1 id="chatTitle">指令台</h1><button id="clear" class="quiet" disabled>清空对话</button></div>
+      <div id="feed" role="log" aria-live="polite">
+        <div class="welcome" id="welcome">
+          <span class="cursor-mark" aria-hidden="true">›_</span>
+          <h2>你想在游戏里做什么？</h2>
+          <p>描述目标，助手会读取当前画面，并在这里反馈结果。</p>
+          <div class="examples">
+            <button data-prompt="分析当前画面，告诉我可以进行哪些操作。"><span>分析当前画面</span><b aria-hidden="true">↗</b></button>
+            <button data-prompt="打开任务界面，领取可领取的日常任务奖励。"><span>领取日常奖励</span><b aria-hidden="true">↗</b></button>
+          </div>
+        </div>
+      </div>
+      <form id="compose">
+        <label for="instruction" class="sr-only">游戏指令</label>
+        <textarea id="instruction" maxlength="4000" placeholder="输入游戏指令，或继续追问…" rows="3" required></textarea>
+        <div class="compose-bar"><label class="mode"><span class="mode-icon" aria-hidden="true">⌁</span><select id="mode" aria-label="执行模式"><option value="operate">允许操作</option><option value="inspect">只读分析</option></select></label>
+          <div><button type="button" id="stop" class="stop" hidden>停止</button><button type="submit" id="send" class="primary">发送 <span aria-hidden="true">↑</span></button></div>
+        </div>
+      </form>
+    </section>
+    <aside class="monitor pane" aria-labelledby="monitorTitle">
+      <div class="pane-head"><h2 id="monitorTitle">设备画面</h2><button class="quiet" id="refreshFrame">刷新画面</button></div>
+      <div class="device-bar"><label for="device">ADB 设备</label><select id="device"><option value="">正在检测…</option></select></div>
+      <div class="display" id="display"><span class="corner tl"></span><span class="corner br"></span><img id="screen" alt="所选设备的最新游戏截图" hidden><p id="screenHint">等待设备画面</p></div>
+      <div class="telemetry"><span id="resolution">— × —</span><span id="frameTime">尚未截图</span></div>
+      <details class="recognition"><summary>识别结果 <span class="count" id="targetCount">0</span></summary><p id="recognitionStatus">获取画面后显示识别来源。</p><ul id="targets"></ul></details>
+      <div class="trace"><h2>执行记录</h2><p id="idle" class="muted">发送指令后，可在此查看每一步判断和操作。</p><ol id="steps"></ol></div>
+    </aside>
+  </main>
+  <dialog id="settings">
+    <form id="configForm">
+      <div class="modal-head"><h2>连接设置</h2><button type="button" class="close" id="closeSettings" aria-label="关闭设置">×</button></div>
+      <fieldset><legend>模型服务</legend>
+        <label for="url">Model URL</label><input type="url" id="url" placeholder="https://your-provider.example/v1" autocomplete="off" spellcheck="false">
+        <label for="key">API Key <small>仅在当前页面内存中使用</small></label><input type="password" id="key" placeholder="本地免鉴权模型可留空" autocomplete="off" spellcheck="false">
+        <label for="model">模型 ID</label><div class="inline"><input id="model" list="modelOptions" placeholder="单模型服务可自动识别" autocomplete="off" spellcheck="false"><button type="button" id="getModels" class="outline">获取模型</button></div>
+        <datalist id="modelOptions"></datalist>
+        <select id="fetchedModels" aria-label="可用模型" hidden></select>
+        <label for="inputMode">模型输入</label><select id="inputMode"><option value="vision">截图 + OCR 与模板匹配结果</option><option value="text">仅 OCR 与模板匹配结果</option></select>
+        <p class="hint">发送指令时，所选输入会提交到此模型 URL。</p>
+      </fieldset>
+      <details class="advanced"><summary>设备与执行选项</summary>
+        <label for="address">ADB 连接地址</label><div class="inline"><input id="address" placeholder="127.0.0.1:16384" autocomplete="off"><button type="button" class="outline" id="connect">连接</button></div>
+        <button type="button" class="quiet" id="scan">重新检测设备</button>
+        <label for="limit">每条指令的步数上限</label><input id="limit" type="number" min="1" max="100" value="24" required>
+      </details>
+      <p id="configStatus" role="status"></p>
+      <button class="primary save" type="submit">保存设置</button>
+    </form>
+  </dialog>
+</body>
+</html>
