@@ -51,6 +51,7 @@ export function validateDecision(reply, frame, readOnly, vision, maaAvailable = 
   if (a.type === 'load_guide' && typeof a.id === 'string' && /^[1-9]\d{0,9}$/.test(a.id)) {
     return {...decision, action:{type:a.type,id:a.id}};
   }
+  if (researchTools.has(a.type)) throw new Error('资料工具 ' + a.type + ' 的参数无效。');
   if (readOnly || reply.intent === 'inspect') throw new Error('只读分析收到了操作指令，已停止。');
   let action;
   const px = (n, size) => Math.round(integer(n, 0, 1000) * (size - 1) / 1000);

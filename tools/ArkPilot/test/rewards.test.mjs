@@ -1,7 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateDecision } from '../lib/agent.mjs';
+import { decide } from '../lib/model.mjs';
 import { matchChapterRewards, matchRewards, matchSimulations } from '../lib/rewards.mjs';
+
+test('兼容接口拒绝原生函数时，JSON规划仍能看到最新的章节查询及参数',async t=>{
+  const config={url:'http://localhost/v1',model:'test',vision:false};
+  const context={instruction:'查看苦难摇篮的公开首通奖励',recentSteps:[]};
+  const action={type:'chapter_rewards',stage:'苦难摇篮'};
+  t.mock.method(globalThis,'fetch',async (_url,options)=>{
+    const body=JSON.parse(options.body);
+    if(body.tools)return new Response(null,{status:400});
+    assert.match(body.messages[0].content,/chapter_rewards\(stage\)/);
+    return Response.json({choices:[{message:{content:JSON.stringify({intent:'inspect',goal:'查章节',note:'查表',action})}}]});
+  });
+  const chosen=await decide(config,context,{},AbortSignal.timeout(5000));
+  assert.equal(config.toolsUnsupported,true);
+  assert.deepEqual(validateDecision(chosen,{},true,false).action,action);
+  assert.throws(()=>validateDecision({...chosen,action:{type:'chapter_rewards'}},{},true,false),/资料工具.*参数无效/);
+});
 
 test('章节首通按关卡ID去重，保留难度，排除过期、尚未开放和临时借用主线地图的活动', () => {
   const battle = {stageId:'base',code:'1-1',stageType:'MAIN',zoneId:'main_1',difficulty:'NORMAL',diamondOnceDrop:1};
