@@ -14,6 +14,7 @@ const labels = {
   WeeklyTask: '周常任务标签', ReceiveMail: '领取邮件附件', StartButton2: '编队页开始行动',
   'StageDrops-Stars-3': '结算三星标志', 'StageDrops-Stars-2': '结算二星标志',
   'StageDrops-Stars-Adverse': '磨难结算标志', UseStone: '源石恢复提示',
+  OperOpenInformationMenu: '干员档案入口', OperOpenParadox: '档案中的悖论模拟入口',
   OperOpenParadoxChooseSkill: '悖论模拟开始按钮',
   UseMedicine: '理智药恢复提示',
   BattleCostFlag: '战斗部署费用图标', BattleHpFlag: '战斗防御点图标', BattleHpFlag2: '战斗防御点图标',
