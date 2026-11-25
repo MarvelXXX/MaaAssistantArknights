@@ -20,6 +20,44 @@ async function listen(server, t) {
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
   return 'http://127.0.0.1:' + server.address().port;
 }
+
+test('后台首通在网页断开后保持唯一运行，新网页接收进度、明确停止后才终止', async t => {
+  const oldFile=process.env.ARK_REWARD_QUEUE;
+  process.env.ARK_REWARD_QUEUE='test-reward-manifest.json';
+  t.after(()=>{ if (oldFile===undefined) delete process.env.ARK_REWARD_QUEUE; else process.env.ARK_REWARD_QUEUE=oldFile; });
+  let runs=0, running;
+  const app=await listen(createServer({getDevice:async()=>({}),getHome:async()=>null,
+    runQueue:async({signal,emit})=>{
+      runs++;
+      running={signal,emit};
+      emit({type:'checkpoint',text:'首项开始'});
+      await delay(15000,undefined,{signal});
+    }}),t);
+  const post=(route,data,signal)=>fetch(app+'/api/'+route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data),signal});
+  const health=async()=>(await fetch(app+'/api/health')).json();
+  const data={instruction:'/后台首通清单',serial:'device',url:'http://example.invalid/v1',model:'test',backgroundQueue:true};
+  const original=new AbortController();
+  const initial=await post('run',data,original.signal);
+  assert.equal(initial.status,200);
+  const {queue}=await health();
+  assert.equal(queue.serial,'device');
+  original.abort();
+  await assert.rejects(initial.text());
+  assert.equal(running.signal.aborted,false);
+  running.emit({type:'checkpoint',text:'第二项进行中'});
+  assert.equal((await post('run',data)).status,409);
+  assert.equal((await post('reward-queue/stop',{id:'another-run'})).status,409);
+  const viewer=await post('reward-queue/attach',{id:queue.id});
+  assert.equal(viewer.status,200);
+  assert.equal((await post('reward-queue/stop',{id:queue.id})).status,200);
+  const events=(await viewer.text()).trim().split('\n').map(s=>JSON.parse(s));
+  assert.equal(events[0].id,queue.id);
+  assert.ok(events.some(e=>e.text==='第二项进行中'));
+  assert.equal(events.at(-1).outcome,'stop');
+  assert.equal(runs,1);
+  assert.equal((await health()).active,false);
+  assert.equal((await post('reward-queue/attach',{id:queue.id})).status,409);
+});
 test('HTTP 对话经兼容模型返回点击，重新截图确认，并支持纯文本追问', async t => {
   const screens = [makeFrame(120, 0), makeFrame(0, 120)];
   let scene = 0;

@@ -5,6 +5,7 @@ let saved;
 try { saved = JSON.parse(localStorage.getItem(storeKey)) || {}; } catch { saved = {}; }
 let config = { url: saved.url || '', model: saved.model || '', key: '', vision: saved.vision !== false, limit: saved.limit || 24 };
 let controller = null;
+let queueControl = null;
 let previewController = null;
 let deviceGeneration = 0;
 const history = [];
@@ -16,7 +17,7 @@ function persist() {
   try { localStorage.setItem(storeKey, JSON.stringify(saved)); } catch {}
 }
 function modelStatus() {
-  $('modelLight').textContent = config.url ? '模型已配置' : '模型待配置';
+  $('modelLight').textContent = !config.url ? '模型待配置' : config.key ? '模型已配置' : '已配置模型地址';
   $('modelLight').classList.toggle('ready', !!config.url);
   $('modelLight').title = config.model || '';
 }
@@ -184,15 +185,17 @@ async function* events(res) {
     if (rest.trim()) yield JSON.parse(rest);
   } finally { reader.releaseLock(); }
 }
-async function submit(event, native = null, label = '') {
+async function submit(event, native = null, label = '', existing = null) {
   event?.preventDefault();
   const instruction = label || $('instruction').value.trim();
   if (!instruction || controller) return;
-  if (!native && !config.url) { openSettings('填写模型服务地址后即可发送这条指令。'); return; }
-  const serial = $('device').value;
+  if (!existing && !native && !config.url) { openSettings('填写模型服务地址后即可发送这条指令。'); return; }
+  const serial = existing?.serial || $('device').value;
   const researchOnly = $('mode').value === 'research';
   if (!serial && !researchOnly) { openSettings('操作游戏需要连接设备，查攻略可选择“仅查攻略”。'); return; }
   const local = new AbortController(); controller = local;
+  const detached = instruction === '/后台首通清单';
+  queueControl = detached ? {id:existing?.id,stopRequested:false} : null;
   previewController?.abort();
   const previous = history.filter(m => m.serial === serial).slice(-12).map(({ role, text }) => ({ role, text }));
   history.push({ role: 'user', text: instruction, serial }); message('user', instruction);
@@ -201,10 +204,16 @@ async function submit(event, native = null, label = '') {
   busy(true);
   let end = false, step, applied = [];
   try {
-    const res = await post('run', { ...(native ? {} : config), ...guides.current(), native, serial, instruction, history: previous,
-      researchOnly,readOnly: $('mode').value !== 'operate' }, local.signal);
+    const res = existing ? await post('reward-queue/attach',{id:existing.id},local.signal) :
+      await post('run', { ...(native ? {} : config), ...guides.current(), native, serial, instruction, history: previous,
+        backgroundQueue:detached,researchOnly,readOnly: $('mode').value !== 'operate' }, local.signal);
     for await (const e of events(res)) {
-      if (e.type === 'frame') showFrame(e);
+      if (e.type === 'queue') {
+        queueControl.id = e.id;
+        reply.textContent = '后台清单运行中。重新打开指令台可查看进度或停止。';
+        if (queueControl.stopRequested) await stopRun();
+      }
+      else if (e.type === 'frame') showFrame(e);
       else if (e.type === 'guide_loaded') guides.render(e);
       else if (e.type === 'sources' || e.type === 'video_notes') {
         const hits = e.results || [{title:e.clip.bv+' P'+e.clip.part+' · '+e.clip.timestamps.length+' 帧',url:e.clip.url}];
@@ -231,6 +240,7 @@ async function submit(event, native = null, label = '') {
         step = addStep(e.note); step.textContent = '待执行 · ' + actionName(e.action);
       } else if (e.type === 'applied') {
         applied.push(actionName(e.action)); if (step) step.textContent = '已执行 · ' + applied.at(-1);
+        if (detached && applied.length>30) applied.shift();
       } else if (e.type === 'stale') { if (step) step.textContent = e.text; }
       else if (e.type === 'error') throw new Error(e.text);
       else if (e.type === 'end') {
@@ -238,6 +248,7 @@ async function submit(event, native = null, label = '') {
         addStep(({ finish: '已完成', ask: '等待补充', stop: '已停止' })[e.outcome]).textContent = e.goal;
         history.push({ role: 'assistant', text: e.note, serial }); end = true;
       }
+      if (detached) while ($('steps').childElementCount>250) $('steps').firstElementChild.remove();
       $('feed').scrollTop = $('feed').scrollHeight;
     }
     if (!end) throw new Error('连接中断，任务结果未确认。');
@@ -245,13 +256,22 @@ async function submit(event, native = null, label = '') {
     const text = local.signal.aborted ? '已停止。' : err.message;
     reply.textContent = text; reply.parentElement.classList.add('error');
     addStep(text); history.push({ role: 'assistant', text: text + (applied.length ? ' 已执行：' + applied.join('、') : ''), serial });
+    const queueId = queueControl?.id;
+    if (queueId) setTimeout(()=>reconnectQueue(queueId),1000);
   } finally {
-    controller = null; busy(false); $('instruction').focus();
+    controller = null; queueControl = null; busy(false); $('instruction').focus();
     if (native) refreshPreview();
   }
 }
 $('compose').onsubmit = submit;
-$('stop').onclick = () => controller?.abort();
+async function stopRun() {
+  if (!queueControl) { controller?.abort(); return; }
+  queueControl.stopRequested = true;
+  if (!queueControl.id) return;
+  try { await post('reward-queue/stop',{id:queueControl.id}); }
+  catch (err) { addStep('停止请求未确认：'+err.message); }
+}
+$('stop').onclick = stopRun;
 $('instruction').onkeydown = e => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
     e.preventDefault(); $('compose').requestSubmit();
@@ -266,4 +286,13 @@ document.querySelectorAll('[data-prompt]').forEach(button => {
 });
 const guides = setupGuides({post,events,getConfig:() => config,runDirect:(a,label) => submit(null,a,label)});
 modelStatus();
-scanDevices();
+async function reconnectQueue(expectedId) {
+  try {
+    const res = await fetch('/api/health');
+    const {queue} = await res.json();
+    if (!queue || controller || (expectedId && queue.id!==expectedId)) return;
+    if ([...$('device').options].some(o=>o.value===queue.serial)) $('device').value=queue.serial;
+    await submit(null,null,'/后台首通清单',queue);
+  } catch { /* Local service may still be starting. */ }
+}
+scanDevices().then(reconnectQueue);

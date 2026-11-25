@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { readFile } from 'node:fs/promises';
@@ -23,6 +24,38 @@ function eventStream(res) {
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });
   res.flushHeaders();
   return event => { if (!res.destroyed) res.write(JSON.stringify(event) + '\n'); };
+}
+function backgroundQueue(serial) {
+  const info = {id:randomUUID(),serial};
+  const controller = new AbortController();
+  const clients = new Set();
+  let checkpoint, frame;
+  return {
+    info, controller,
+    subscribe(res) {
+      const send = eventStream(res);
+      clients.add(res);
+      res.once('close',()=>clients.delete(res));
+      send({type:'queue',...info});
+      if (checkpoint) send(checkpoint);
+      if (frame) send(frame);
+    },
+    emit(event) {
+      if (event.type==='checkpoint') checkpoint=event;
+      if (event.type==='frame') frame=event;
+      if (!clients.size) return;
+      const line=JSON.stringify(event)+'\n';
+      for (const res of clients) {
+        // A stalled viewer can reconnect to the latest frame without holding up the emulator.
+        if (res.writableLength>2*1024*1024) res.destroy();
+        else if (!res.destroyed) res.write(line);
+      }
+    },
+    close() {
+      for (const res of clients) res.end();
+      clients.clear();
+    },
+  };
 }
 function json(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -59,8 +92,9 @@ function historyFrom(data) {
     .map(m => ({ role: m.role, text: m.text.slice(0, 4000) }));
 }
 
-export function createServer({ getDevice = selectDevice, getHome = maaHome, native = executeMaa, recording = recognizeRecording } = {}) {
+export function createServer({ getDevice = selectDevice, getHome = maaHome, native = executeMaa, recording = recognizeRecording, runQueue = runRewardQueue } = {}) {
   let active = false;
+  let background;
   return http.createServer(async (req, res) => {
     // Browser requests must originate in this local UI, including after DNS rebinding.
     const port = req.socket.localPort;
@@ -81,7 +115,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
         return res.end(file);
       }
-      if (req.method === 'GET' && req.url === '/api/health') return json(res, 200, { app: 'ArkPilot', guides:true, strategy:true, active });
+      if (req.method === 'GET' && req.url === '/api/health') return json(res, 200, { app: 'ArkPilot', guides:true, strategy:true, active, queue:background?.info });
       const media = req.method === 'GET' && req.url.match(/^\/api\/guides\/media\/(BV[a-zA-Z0-9]{10})\/(\d{1,4})$/);
       if (media) {
         const src = await openBiliMedia(media[1], Number(media[2]), signal, req.headers.range);
@@ -109,6 +143,13 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
       }
       const data = await body(req, req.url === '/api/guides/frames' ? 6 * 1024 * 1024 : undefined);
       switch (req.url) {
+        case '/api/reward-queue/attach':
+        case '/api/reward-queue/stop': {
+          if (!background || data.id!==background.info.id) return json(res,409,{error:'该后台清单已结束。'});
+          if (req.url.endsWith('/attach')) return background.subscribe(res);
+          background.controller.abort();
+          return json(res,200,{stopping:true});
+        }
         case '/api/roster/maa-file': {
           const home = await getHome();
           const input = home && await readFile(path.join(home,'data','OperBoxData.json'),'utf8').catch(()=>null);
@@ -176,7 +217,9 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
       const config = direct ? null : modelConfig(data);
       const instruction = data.instruction?.trim();
       if (!instruction || instruction.length > 4000) throw new Error('指令长度应在 1 至 4000 字之间。');
-      const queue = instruction === '/首通清单';
+      const detached = instruction === '/后台首通清单';
+      if (detached && data.backgroundQueue!==true) throw new Error('请刷新指令台以使用后台运行和停止功能。');
+      const queue = detached || instruction === '/首通清单';
       const queueFile = queue && (process.env.ARK_REWARD_QUEUE ||
         parseEnv(await readFile(new URL('./.env',import.meta.url),'utf8').catch(()=> '')).ARK_REWARD_QUEUE);
       if (queue && (direct || researchOnly || data.readOnly || !config?.vision || !queueFile)) {
@@ -186,11 +229,17 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('步数上限应为 1 至 100。');
       if (active) return json(res, 409, { error: '已有指令在执行，请在原对话中停止或等待结束。' });
       active = true;
+      const job = detached ? backgroundQueue(data.serial) : null;
       try {
-        const device = researchOnly ? null : await getDevice(data.serial, signal);
+        if (job) {
+          background=job;
+          job.subscribe(res);
+        }
+        const setupSignal = job ? AbortSignal.any([job.controller.signal,AbortSignal.timeout(30*60*1000)]) : signal;
+        const device = researchOnly ? null : await getDevice(data.serial, setupSignal);
         const home = await getHome();
-        if (config) config.model = await chooseModel(config, signal);
-        const emit = eventStream(res);
+        if (config) config.model = await chooseModel(config, setupSignal);
+        const emit = job ? job.emit : eventStream(res);
         async function runCommand({instruction, signal, emit, history = [], guide = null, guideId, onGuideStart, resumeAfterStep, limit, expectedStage, allowNative = true, fixedTeam = false}) {
           let adaptationBlocked = false;
           let formation = !fixedTeam && data.formation === true;
@@ -335,13 +384,20 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home && allowNative ? runNative : null });
         }
         if (queue) {
-          await runRewardQueue({filename:queueFile, serial:data.serial,
-            device, config, runCommand, emit, signal:controller.signal});
+          await runQueue({filename:queueFile, serial:data.serial,
+            device, config, runCommand, emit, signal:job ? job.controller.signal : controller.signal});
         } else {
           await runCommand({instruction, signal, emit, history:historyFrom(data.history), guide:attachedGuide, limit});
         }
-        res.end();
-      } finally { active = false; }
+        if (!job) res.end();
+      } catch (error) {
+        if (!job) throw error;
+        job.emit(job.controller.signal.aborted ? {type:'end',outcome:'stop',goal:'后台首通清单',note:'后台清单已停止，进度已保存。'} :
+          {type:'error',text:error.message});
+      } finally {
+        if (job) { job.close(); background=undefined; }
+        active = false;
+      }
     } catch (error) {
       if (res.destroyed) return;
       const message = signal.aborted ? '任务已停止或超时。' : error.message;
