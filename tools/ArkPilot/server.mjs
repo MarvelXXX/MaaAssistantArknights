@@ -188,10 +188,10 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         const home = await getHome();
         if (config) config.model = await chooseModel(config, signal);
         const emit = eventStream(res);
-        async function runCommand({instruction, signal, emit, history = [], guide = null, guideId, onGuideStart, limit, expectedStage, allowNative = true, fixedTeam = false}) {
+        async function runCommand({instruction, signal, emit, history = [], guide = null, guideId, onGuideStart, resumeAfterStep, limit, expectedStage, allowNative = true, fixedTeam = false}) {
           let adaptationBlocked = false;
           let formation = !fixedTeam && data.formation === true;
-          const runNative = async a => {
+          const runNative = async (a, afterStep) => {
             if (expectedStage && (!['Copilot','ParadoxCopilot'].includes(a.task) || !await matchesRewardStage(guide,expectedStage))) {
               throw Object.assign(new Error('当前作业不是本项首通目标，请用准确的关卡 ID 重新载入。'),{beforeStart:true});
             }
@@ -221,7 +221,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             timer = setTimeout(updateFrame, 1500);
             try {
               if (guideId) onGuideStart?.(guideId);
-              return await native(a, {home,device,serial:data.serial,guide,formation,signal:watching,progress:text=>{
+              return await native(a, {home,device,serial:data.serial,guide,formation,afterStep,signal:watching,progress:text=>{
                 phase = text;
                 emit({type:'core',text});
               }});
@@ -303,7 +303,15 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             emit({type:'guide_loaded',...material});
             return guidance.plan;
           };
-          await runAgent({ config, device, instruction, history, requireAdaptation:queue ? false : undefined,
+          let continued = false;
+          const continueBattle = fixedTeam && resumeAfterStep && allowNative && home ? async step=>{
+            if (step!==resumeAfterStep || continued) return;
+            continued = true;
+            emit({type:'core',text:'已通过教学指引，Maa 从第 '+(step+1)+' 步继续当前战斗。'});
+            await runNative({type:'maa',task:'Copilot'},step);
+            return 'Maa 已执行后续作业，请核对同一局的结算。';
+          } : undefined;
+          await runAgent({ config, device, instruction, history, continueBattle, requireAdaptation:queue ? false : undefined,
             readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home && allowNative ? runNative : null });
         }
         if (queue) {

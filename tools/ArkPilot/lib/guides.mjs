@@ -161,7 +161,8 @@ export async function openBiliMedia(bv, part, signal, range) {
     url.search = new URLSearchParams({bvid:bv,cid:String(page.cid),qn:'64',fnval:'1',platform:'html5'});
     const reply = await publicJson(url,signal,biliHeaders);
     const file = reply.data?.durl?.[0];
-    if (reply.code !== 0 || reply.data?.format !== 'mp4' || reply.data.durl?.length !== 1 || !file?.url || file.size > 1024**3) {
+    if (reply.code !== 0 || !/^mp4(?:\d{3,4})?$/.test(reply.data?.format || '') ||
+        reply.data?.durl?.length !== 1 || !file?.url || file.size > 1024**3) {
       throw new Error('该视频未提供可读取的单段公开 MP4，或超过 1 GiB。可选择本地录像。');
     }
     const cdn = new URL(file.url);

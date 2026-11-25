@@ -62,7 +62,7 @@ async function workspace(fn) {
 
 // Receives only internally constructed task types and parameters. The child owns
 // MaaCore and its callbacks; disconnecting the request also stops this worker.
-export async function runCore({ home, work, client = '', serial = '', type, params, prepare = false, onBox }, signal, progress = () => {}) {
+export async function runCore({ home, work, client = '', serial = '', type, params, stageTask, prepare = false, onBox }, signal, progress = () => {}) {
   signal.throwIfAborted();
   if (!home) throw new Error('未找到 Maa 运行包。请设置 ARK_MAA_HOME 指向包含 MaaCore.dll 和 resource 的安装目录，再启动 ArkPilot。');
   return new Promise((resolve, reject) => {
@@ -107,7 +107,8 @@ export async function runCore({ home, work, client = '', serial = '', type, para
       }
       resolve(coreVersion);
     });
-    child.stdin.write(JSON.stringify({home, work, client, adb:adbPath(), serial, type, params:JSON.stringify(params), prepare}) + '\n');
+    child.stdin.write(JSON.stringify({home, work, client, adb:adbPath(), serial, type, params:JSON.stringify(params),
+      stageTask:stageTask && JSON.stringify(stageTask), prepare}) + '\n');
   });
 }
 
@@ -137,10 +138,10 @@ export async function scanRoster({home, device, serial, signal}) {
   });
 }
 
-export async function executeMaa(action, { home, device, serial, guide, formation, signal, progress, prepare = false }) {
+export async function executeMaa(action, { home, device, serial, guide, formation, signal, progress, prepare = false, afterStep }) {
   const a = nativeAction(action, !!guide);
   return workspace(async work => {
-    let params;
+    let params, stageTask;
     let type = a.task;
     if (a.task === 'Fight') params = {stage:a.stage, times:a.times, medicine:0, stone:0, expiring_medicine:0, medicine_expire_days:0};
     if (a.task === 'Award') params = {award:true, mail:false, recruit:false, orundum:false, mining:false, specialaccess:false};
@@ -150,7 +151,17 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
       const stage = await paradoxStageId(plan);
       if (a.task === 'ParadoxCopilot' && !stage) throw new Error('从干员列表启动悖论模拟需要对应的悖论作业。');
       await writeFile(filename, JSON.stringify(stage ? {...plan,stage_name:stage} : plan), 'utf8');
-      if (stage) {
+      if (afterStep != null) {
+        if (a.task!=='Copilot' || stage || !Number.isInteger(afterStep) || afterStep<1 || afterStep>=plan.actions.length) {
+          throw new Error('续打起点与作业不匹配。');
+        }
+        const actions = plan.actions.slice(afterStep);
+        const allowed = ['Deploy','Skill','Retreat','SpeedUp','SkillDaemon','SkillUsage','Output','部署','技能','撤退','二倍速','摆完挂机'];
+        if (actions.some(step=>!allowed.includes(step.type || 'Deploy'))) throw new Error('续打仅接受部署、技能和其他战斗内作业步骤。');
+        type = 'SingleStep';
+        stageTask = {type:'copilot',subtype:'stage',details:{stage_name:plan.stage_name}};
+        params = {type:'copilot',subtype:'action',details:{actions}};
+      } else if (stage) {
         type = 'ParadoxCopilot';
         // Maa accepts a list when it must find the operator and select the skill.
         params = a.task === 'ParadoxCopilot' ? {list:[filename]} : {filename};
@@ -158,7 +169,7 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
         params = {filename, formation:formation === true, loop_times:1, use_sanity_potion:false};
       }
     }
-    const job = {home, work, type, params, serial, prepare};
+    const job = {home, work, type, params, stageTask, serial, prepare};
     if (prepare) return runCore(job, signal, progress);
     return connectedCore(job,device,signal,progress);
   });

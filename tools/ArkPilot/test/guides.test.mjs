@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from '../server.mjs';
-import { checkPlan, deploymentTarget, importGuide, matchesRewardStage, paradoxStageId, searchGuides } from '../lib/guides.mjs';
+import { checkPlan, deploymentTarget, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from '../lib/guides.mjs';
 import { nativeAction } from '../lib/maa.mjs';
 import { runAgent, validateDecision } from '../lib/agent.mjs';
 import { explainFrames } from '../lib/model.mjs';
@@ -11,6 +11,22 @@ const plan = {stage_name:'main_01-07', opers:[{name:'令',skill:3}], actions:[
 ]};
 const getSignal = () => AbortSignal.timeout(10000);
 const reply = (action,intent='operate') => ({intent,goal:'查作业',note:'核对结果',action});
+
+test('解析带清晰度的单段 MP4 并保留 Range，拒绝其他封装', async t => {
+  let format='mp4720';
+  t.mock.method(globalThis,'fetch',async (url,options)=>{
+    const u=new URL(url);
+    if (u.pathname.endsWith('/view')) return Response.json({code:0,data:{pages:[{cid:123,duration:60}]}});
+    if (u.pathname.endsWith('/playurl')) return Response.json({code:0,data:{format,durl:[{url:'https://test.bilivideo.com/file.mp4',size:30}]}});
+    assert.equal(options.headers.Range,'bytes=0-3');
+    return new Response(new Uint8Array([0,1,2,3]),{status:206});
+  });
+  const result=await openBiliMedia('BV0123456789',1,getSignal(),'bytes=0-3');
+  assert.equal(result.status,206);
+  assert.equal((await result.arrayBuffer()).byteLength,4);
+  format='flv720';
+  await assert.rejects(openBiliMedia('BV1123456789',1,getSignal()),/单段公开 MP4/);
+});
 
 test('作业必须包含有效的部署与编队，模型无权传入原生任务参数', () => {
   assert.equal(checkPlan(plan),plan);

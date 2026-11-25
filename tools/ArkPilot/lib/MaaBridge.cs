@@ -47,7 +47,7 @@ public static class MaaBridge
         if (!ok) throw new InvalidOperationException(operation);
     }
     public static void Run(string home, string work, string client, string adb, string serial,
-                           string type, string json, bool prepare)
+                           string type, string json, string stageTask, bool prepare)
     {
         Require(SetDllDirectory(home), "SetDllDirectory");
         Console.WriteLine("version\t" + Text(AsstGetVersion()));
@@ -64,6 +64,8 @@ public static class MaaBridge
         try {
             if (!String.IsNullOrEmpty(serial) && !prepare)
                 Require(AsstConnect(handle, Utf8(adb), Utf8(serial), Utf8("General")) != 0, "AsstConnect");
+            if (type == "SingleStep" && !String.IsNullOrEmpty(stageTask))
+                Require(AsstAppendTask(handle, Utf8(type), Utf8(stageTask)) != 0, "SingleStep stage");
             Require(AsstAppendTask(handle, Utf8(type), Utf8(json)) != 0, "AsstAppendTask");
             if (prepare) return;
             if (cancelled) throw new OperationCanceledException();

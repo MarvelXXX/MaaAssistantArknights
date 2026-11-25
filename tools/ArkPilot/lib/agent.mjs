@@ -125,7 +125,7 @@ async function deployFromGuide(action, guide, frame, device, signal, pause) {
 }
 
 export async function runAgent({ config, device, instruction, history, readOnly, limit, signal, emit,
-  runNative, guidance, lookupGuide, requireAdaptation = wantsAdaptedPlan(instruction),
+  runNative, guidance, lookupGuide, continueBattle, requireAdaptation = wantsAdaptedPlan(instruction),
   observe = recognize, plan = decide, matches = stillMatches, pause = (ms, s) => delay(ms, undefined, { signal: s }) }) {
   const steps = [];
   const attemptedTasks = new Set();
@@ -248,6 +248,16 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     actionCount++;
     steps.push({ turn, action, note, result: action.type === 'maa' ? 'Maa 任务链已结束，请核对结果' : action.type === 'wait' ? '已等待' : '已发送，需查看下一帧' });
     emit({ type: 'applied', turn, action });
+    if (action.type==='deploy' && continueBattle) {
+      try {
+        const result = await continueBattle(action.step);
+        if (result) steps.push({turn,action,note,result});
+      } catch (error) {
+        signal.throwIfAborted();
+        steps.push({turn,action,note,result:'续打尚未确认完成，请从当前战场继续。'+error.message});
+        emit({type:'research_error',text:'续打已交回视觉操作。'+error.message,turn});
+      }
+    }
     if (action.type !== 'wait') await pause(800, signal);
   }
 }

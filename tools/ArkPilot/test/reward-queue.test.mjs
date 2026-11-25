@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {nextRewardGuide, reconcileReward, selectRewardTarget} from '../lib/reward-queue.mjs';
+import {nextRewardGuide, reconcileReward, selectRewardTarget, verifyWalletAccount} from '../lib/reward-queue.mjs';
 import {watchTutorialDialog} from '../lib/maa.mjs';
 
 test('首通须有实机结论和对应余额变化，已通关不重复记账', () => {
@@ -64,4 +64,26 @@ test('固定队教学只在对白与击杀计数持续停滞时交回当前战�
   assert.equal(stalled('UseSkill',frame(2),90000),false);
   assert.equal(stalled('BattleAvatarDialog',frame(2),95000),false);
   assert.equal(stalled('BattleAvatarDialog',[],160000),false);
+});
+
+test('更正作业后可提前重试一次，余额待核和已完成均不能重开', () => {
+  const t={id:'t',requires:[],revision:2};
+  const row={status:'未完成',revision:1,nextAt:100,review:true};
+  const ledger={items:{t:row},opened:{}};
+  assert.equal(selectRewardTarget([t],ledger,10),t);
+  row.revision=2;
+  assert.equal(selectRewardTarget([t],ledger,10),undefined);
+  t.revision=3;
+  for (const status of ['余额待复核','余额下降','首通已核','原已完成']) {
+    row.status=status;
+    assert.equal(selectRewardTarget([t],ledger,10),undefined);
+  }
+});
+
+test('UID 有分歧时只读新帧，须连续两次匹配才能继续', async () => {
+  const read=values=>async()=>({uid:values.shift()});
+  assert.equal((await verifyWalletAccount(read(['123456']),'123456')).uid,'123456');
+  assert.equal((await verifyWalletAccount(read(['123458','123456','123456']),'123456')).uid,'123456');
+  await assert.rejects(verifyWalletAccount(read(['123458','123458']),'123456'),/UID/);
+  await assert.rejects(verifyWalletAccount(read(['123458','123456','123458']),'123456'),/UID/);
 });

@@ -22,6 +22,9 @@ function validateManifest(manifest, serial) {
     if (t.retryGuideIds != null && (!Array.isArray(t.retryGuideIds) || t.retryGuideIds.length>20 ||
         t.retryGuideIds.some(id=>typeof id!=='string' || !/^[1-9]\d{0,9}$/.test(id)))) throw new Error('备选作业号无效。');
     if (t.plan) checkPlan(t.plan);
+    if (t.resumeAfterStep != null && (!t.fixedTeam || !t.stage || !Number.isInteger(t.resumeAfterStep) ||
+        t.resumeAfterStep<1 || t.resumeAfterStep>=24)) throw new Error('教学续打需要固定队、关卡和有效的作业步骤。');
+    if (t.revision != null && (!Number.isSafeInteger(t.revision) || t.revision<1)) throw new Error('攻略修订号无效。');
     ids.add(t.id);
   }
   if (manifest.targets.some(t => t.requires.some(id => !ids.has(id) || id === t.id))) throw new Error('清单含未知前置关卡。');
@@ -48,8 +51,9 @@ export function selectRewardTarget(targets, ledger, now) {
   if (interrupted) return interrupted;
   return targets.find(t => {
     const row = ledger.items[t.id];
+    const corrected = row?.status === '未完成' && (t.revision || 0) > (row.revision || 0);
     const revised = row?.status === '未完成' && row.review && nextRewardGuide(t,row);
-    return !closed.has(row?.status) && (!row?.review || revised) && !(row?.nextAt > now) &&
+    return !closed.has(row?.status) && (!row?.review || revised || corrected) && (!(row?.nextAt > now) || corrected) &&
       !(t.ap > 0 && ledger.sanityWait > now) && !(t.crystal && ledger.crystalWait > now && !ledger.opened[t.chapter]) &&
       t.requires.every(id => closed.has(ledger.items[id]?.status));
   });
@@ -70,23 +74,27 @@ export function reconcileReward(target, report, before, after) {
 }
 
 function balanceDetail(image) {
-  const regions = [[0.65,0,0.34,0.16],[0,0.53,0.24,0.11]].map(([x,y,w,h]) =>
-    [Math.floor(x*image.width),Math.floor(y*image.height),Math.floor(w*image.width),Math.floor(h*image.height)]);
-  const width = Math.max(...regions.map(r=>r[2]));
-  const height = regions.reduce((sum,r)=>sum+r[3],0);
+  const regions = [[0.65,0,0.34,0.13,2],[0,0.55,0.21,0.085,3]].map(([x,y,w,h,zoom]) =>
+    ({x:Math.floor(x*image.width),y:Math.floor(y*image.height),w:Math.floor(w*image.width),h:Math.floor(h*image.height),zoom}));
+  const width = Math.max(...regions.map(r=>r.w*r.zoom));
+  const height = regions.reduce((sum,r)=>sum+r.h*r.zoom,0);
   const data = Buffer.alloc(width*height*4);
   let top = 0;
-  for (const [x,y,w,h] of regions) {
+  for (const {x,y,w,h,zoom} of regions) {
     for (let line=0;line<h;line++) {
-      const start = ((y+line)*image.width+x)*4;
-      image.data.copy(data,((top+line)*width)*4,start,start+w*4);
+      const src=((y+line)*image.width+x)*4, dst=(top+line*zoom)*width*4;
+      for (let col=0;col<w;col++) {
+        const rgba=image.data.readUInt32LE(src+col*4);
+        for (let j=0;j<zoom;j++) data.writeUInt32LE(rgba,dst+(col*zoom+j)*4);
+      }
+      for (let j=1;j<zoom;j++) data.copy(data,dst+j*width*4,dst,dst+w*zoom*4);
     }
-    top += h;
+    top += h*zoom;
   }
   return 'data:image/jpeg;base64,'+jpeg.encode({width,height,data},94).data.toString('base64');
 }
 
-async function readWallet(device, config, signal, uid) {
+async function captureWallet(device, config, signal) {
   let frame;
   for (let attempt=0;attempt<3;attempt++) {
     frame = await recognize(await device.capture(signal), signal);
@@ -103,8 +111,21 @@ async function readWallet(device, config, signal, uid) {
   }, {...frame,preview:balanceDetail(frame.image),anchors:[]}, signal);
   const m = /^余额\s+(\d{1,7})\s+(\d{1,9})\s+(\d{5,14})$/.exec(reply.note?.trim());
   if (!m || reply.action?.type !== 'finish') throw new Error('未读到两种首页余额。');
-  if (uid && m[3] !== String(uid)) throw new Error('当前游戏 UID 与清单不匹配，已停止。');
-  return {prime:Number(m[1]), orundum:Number(m[2]), image:frame.preview};
+  return {prime:Number(m[1]), orundum:Number(m[2]), uid:m[3], image:frame.preview};
+}
+
+export async function verifyWalletAccount(capture, uid) {
+  const first=await capture();
+  if (!uid || first.uid===String(uid)) return first;
+  // Recheck using fresh frames, keeping the expected ID out of the model prompt.
+  for (let i=0;i<2;i++) {
+    let fresh;
+    try { fresh=await capture(); }
+    catch (error) { throw new Error('未能复核游戏 UID，已停止。',{cause:error}); }
+    if (fresh.uid!==String(uid)) break;
+    if (i===1) return fresh;
+  }
+  throw new Error('连续读取首页仍不能核对游戏 UID，已停止。');
 }
 
 const numbers = wallet => ({prime:wallet.prime, orundum:wallet.orundum});
@@ -156,9 +177,9 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await rename(report+'.tmp',report);
   };
   const notify = text => { emit({type:'checkpoint',text}); emit({type:'core',text}); };
-  const play = async (instruction, {limit, onFrame, expectedStage, guide, guideId, onGuideStart, allowNative = true, fixedTeam = false}) => {
+  const play = async (instruction, {limit, onFrame, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative = true, fixedTeam = false}) => {
     let result;
-    await runCommand({instruction, limit, expectedStage, guide, guideId, onGuideStart, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
+    await runCommand({instruction, limit, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
       if (e.type === 'end') { result = e; return; }
       if (e.type === 'frame') onFrame?.(e);
       emit(e);
@@ -166,12 +187,13 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     return result?.note?.trim() || '未完成';
   };
   const homeWallet = async () => {
-    try { return await readWallet(device,config,signal,manifest.uid); }
+    const read = ()=>verifyWalletAccount(()=>captureWallet(device,config,signal),manifest.uid);
+    try { return await read(); }
     catch (error) {
       signal.throwIfAborted();
       if (error.message.includes('UID')) throw error;
       await play('回到当前游戏账号的首页，若有结算请先观察再退出，有未结束的实战等到结算。仅可用原账号正常快捷登录。停在首页，不领取其他奖励。'+spendRule,{limit:30,allowNative:false});
-      return readWallet(device,config,signal,manifest.uid);
+      return read();
     }
   };
   let wallet = await homeWallet();
@@ -229,7 +251,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       report = await play('本轮只处理 '+t.label+'。'+t.route+'。'+caution+previousNote+avoid+loaded+
         '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。'+spendRule,{
           limit:75, expectedStage:t.stage, guide, guideId:guide ? candidate : undefined, onGuideStart:id=>{usedGuide=id;},
-          allowNative:!credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
+          resumeAfterStep:t.resumeAfterStep, allowNative:!credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
           onFrame:e=>{
             const labels = e.anchors.map(a=>a.label).join('').replace(/\s/g,'');
             if (/已完成模拟作战|获得物资|结算三星标志|磨难结算标志|行动结束/.test(labels)) evidence=e.preview;
@@ -244,6 +266,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await imageFile(t.id,'home',wallet.image);
     if (evidence) await imageFile(t.id,'result',evidence);
     const row = ledger.items[t.id] = {status,attempts,before,after:numbers(wallet),note:report,at:new Date().toISOString()};
+    if (t.revision) row.revision = t.revision;
     if (usedGuide && status==='未完成') failed.add(usedGuide);
     if (failed.size) row.failedGuideIds = [...failed];
     if (offered.size) row.offeredGuideIds = [...offered];
