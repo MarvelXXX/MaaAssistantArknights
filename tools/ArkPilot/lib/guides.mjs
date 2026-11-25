@@ -112,7 +112,8 @@ export async function searchGuides(query, signal, videoCode = '', includeVideos 
   const matches = new Map();
   for (const id of searchIds) {
     const url = new URL('query', station);
-    url.search = new URLSearchParams({page:'1', limit:videoCode || checkRoster ? '50' : '20', orderBy:'views', desc:'true', levelKeyword:id});
+    const limit = checkRoster ? '100' : videoCode ? '50' : '20';
+    url.search = new URLSearchParams({page:'1', limit, orderBy:'views', desc:'true', levelKeyword:id});
     const reply = await publicJson(url, signal);
     if (reply.status_code !== 200 || !Array.isArray(reply.data?.data)) throw new Error('作业站搜索失败。');
     for (const item of reply.data.data) {
@@ -121,7 +122,7 @@ export async function searchGuides(query, signal, videoCode = '', includeVideos 
         if (!idPattern.test(String(item.id)) || !aliases.includes(plan.stage_name.toLowerCase())) continue;
         if (videoCode && !(String(plan.doc?.details || '') + ' ' + String(plan.doc?.title || '')).includes(videoCode)) continue;
         const row = { id: String(item.id), title: String(plan.doc?.title || plan.stage_name).slice(0,150) };
-        if (checkRoster && (plan.opers?.length || plan.groups?.length)) row.unconfirmedSlots = checkRoster(plan);
+        if (checkRoster && (plan.opers?.length || plan.groups?.length)) Object.assign(row,checkRoster(plan));
         if (includeVideos) row.videos = [...new Set(String(plan.doc?.details || '').match(/BV[a-zA-Z0-9]{10}/g) || [])].slice(0,3);
         if (searchIds.length > 1) row.stage = plan.stage_name;
         matches.set(row.id,row);
@@ -131,7 +132,8 @@ export async function searchGuides(query, signal, videoCode = '', includeVideos 
   const rows = [...matches.values()];
   if (checkRoster) {
     const unresolved = row => row.unconfirmedSlots?.length ?? Number.MAX_SAFE_INTEGER;
-    rows.sort((a,b)=>unresolved(a)-unresolved(b));
+    rows.sort((a,b)=>unresolved(a)-unresolved(b) ||
+      (b.leastTrained?.elite ?? -1)-(a.leastTrained?.elite ?? -1) || (b.leastTrained?.level ?? -1)-(a.leastTrained?.level ?? -1));
   }
   return rows;
 }

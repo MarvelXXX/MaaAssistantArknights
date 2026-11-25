@@ -208,6 +208,7 @@ export function setupGuides({post,events,getConfig,runDirect}) {
       const button = document.createElement('button'); button.className = 'quiet';
       let label = '#' + r.id + ' · ' + r.title;
       if (r.unconfirmedSlots) label += r.unconfirmedSlots.length ? ' · 待核对 ' + r.unconfirmedSlots.join('、') : ' · 各编队位均有候选';
+      if (r.leastTrained) label += ' · 最低 ' + r.leastTrained.name + ' 精' + r.leastTrained.elite + ' Lv.' + r.leastTrained.level;
       button.textContent = label; button.onclick = () => importValue(r.id); return button;
     }));
   }

@@ -13,7 +13,7 @@ import { runAgent } from './lib/agent.mjs';
 import { chapterRewards, stageRewards } from './lib/rewards.mjs';
 import { briefPlan, checkPlan, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from './lib/guides.mjs';
 import { executeMaa, maaHome, nativeAction, pausedBattleFrame, recognizeRecording, scanRoster, watchBattlePause, watchTutorialDialog } from './lib/maa.mjs';
-import { adaptGuide, normalizeRoster, unconfirmedSlots } from './lib/roster.mjs';
+import { adaptGuide, normalizeRoster, rosterFit } from './lib/roster.mjs';
 import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
 import { runRewardQueue } from './lib/reward-queue.mjs';
 
@@ -146,7 +146,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         case '/api/maa': return json(res,200,{home:await getHome()});
         case '/api/guides/search': {
           const roster = data.roster && await normalizeRoster(data.roster);
-          return json(res,200,{results:await searchGuides(data.query,signal,data.videoCode,false,roster && (plan=>unconfirmedSlots(plan,roster)))});
+          return json(res,200,{results:await searchGuides(data.query,signal,data.videoCode,false,roster && (plan=>rosterFit(plan,roster)))});
         }
         case '/api/guides/import': return json(res,200,await importGuide(data.value,signal));
         case '/api/guides/frames': return json(res,200,await explainFrames(modelConfig(data),data.frames,signal));
@@ -200,7 +200,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             }
             const paradox = (a.task === 'Copilot' || a.task === 'ParadoxCopilot') && await paradoxStageId(guide);
             if (a.task === 'ParadoxCopilot' && !paradox) throw Object.assign(new Error('请先导入目标悖论模拟的作业。'),{beforeStart:true});
-            if (a.task === 'Copilot' && !paradox && !fixedTeam && (adaptationBlocked || roster && unconfirmedSlots(guide,roster).length)) {
+            if (a.task === 'Copilot' && !paradox && !fixedTeam && (adaptationBlocked || roster && rosterFit(guide,roster).unconfirmedSlots.length)) {
               throw Object.assign(new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。'),{beforeStart:true});
             }
             const observer = new AbortController();
@@ -303,7 +303,8 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
               return {ready:true,reason:result.reason,changes:result.changes,plan:guidance.plan};
             }
             if (a.type === 'find_guide') {
-              const results = await searchGuides(a.stage,signal,'',false,roster && (plan=>unconfirmedSlots(plan,roster)));
+              const found = await searchGuides(a.stage,signal,'',false,roster && (plan=>rosterFit(plan,roster)));
+              const results = roster ? found.slice(0,20) : found;
               for (const r of results) candidates.add(r.id);
               emit({type:'guide_search',stage:a.stage,results});
               return results;

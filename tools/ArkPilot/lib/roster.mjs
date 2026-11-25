@@ -78,14 +78,22 @@ export function assess(plan,roster) {
     const issues = op ? problems(c,op) : [];
     const status = !op ? (found.length || roster.complete ? '未持有' : '尚未识别') :
       issues.includes('不足') ? '练度或技能不足' : issues.length ? '练度资料待补充' : '持有且满足已知要求';
-    return {...c,status};
+    const training = Number.isInteger(op?.elite) && Number.isInteger(op.level) ? {name:op.name,elite:op.elite,level:op.level} : undefined;
+    return {...c,status,training};
   })}));
 }
 
-export function unconfirmedSlots(plan,roster) {
-  return assess(plan,roster)
-    .filter(slot=>!slot.choices.some(choice=>choice.status === '持有且满足已知要求'))
-    .map(slot=>slot.slot);
+export function rosterFit(plan,roster) {
+  const slots=assess(plan,roster), unconfirmedSlots=[], matched=[];
+  const byTraining=(a,b)=>a.elite-b.elite || a.level-b.level;
+  for (const slot of slots) {
+    const known=slot.choices.filter(choice=>choice.status === '持有且满足已知要求');
+    if (!known.length) unconfirmedSlots.push(slot.slot);
+    const strongest=known.map(choice=>choice.training).filter(Boolean).sort(byTraining).at(-1);
+    if (strongest) matched.push(strongest);
+  }
+  const leastTrained=matched.length === slots.length ? matched.sort(byTraining)[0] : undefined;
+  return {unconfirmedSlots,leastTrained};
 }
 
 export async function adaptGuide(plan,roster,notes,propose) {
