@@ -165,3 +165,45 @@ export function stillMatches(observed, current, action) {
   if (changedFraction(0, 0, before.width, before.height, 12) > 0.30) return false;
   return action.type === 'back' || changedFraction(action.x - 22, action.y - 14, 45, 29, 3) < 0.34;
 }
+
+let readyMarker;
+function yellowMask(image, left=0, top=0, width=image.width, height=image.height, scale=1) {
+  const mat=new cv.Mat(height,width,cv.CV_8UC1);
+  const data=mat.data;
+  for (let y=0;y<height;y++) {
+    for (let x=0;x<width;x++) {
+      const i=4*(Math.floor((top+y)*scale)*image.width+Math.floor((left+x)*scale));
+      const r=image.data[i],g=image.data[i+1],b=image.data[i+2];
+      data[y*width+x]=r>180 && g>138 && b<85 && r-g<116 ? 255 : 0;
+    }
+  }
+  return mat;
+}
+
+// A melee animation can cover the tapped operator while the ready marker stays over the same tile.
+export async function sameReadyOperator(before,after,action) {
+  const hud=anchors=>anchors?.some(a=>a.source==='Maa' && a.label==='战斗防御点图标');
+  if (action.type!=='tap' || !hud(before.anchors) || before.client!==after.client ||
+      before.width!==after.width || before.height!==after.height || Math.abs(before.width/before.height-16/9)>0.01) return false;
+  const scale=before.height/720;
+  const left=Math.round(action.x/scale)-32,top=Math.round(action.y/scale)-137;
+  if (left<0 || top<0 || left+64>before.width/scale || top+115>720) return false;
+  await ready;
+  readyMarker ??= readFile(path.join(resource,'template','Battle','BattleFlag','BattleSkillReady.png'))
+    .then(bytes=>yellowMask(pixels(bytes))).catch(()=>null);
+  const marker=await readyMarker;
+  if (!marker) return false;
+  const position=image=>{
+    const area=yellowMask(image,left,top,64,115,scale),result=new cv.Mat();
+    try {
+      cv.matchTemplate(area,marker,result,cv.TM_CCOEFF_NORMED);
+      const {maxVal,maxLoc}=cv.minMaxLoc(result);
+      return maxVal>=0.84 ? maxLoc : null;
+    } finally { area.delete(); result.delete(); }
+  };
+  const previous=position(before.image || pixels(before.png));
+  if (!previous) return false;
+  const image=pixels(after.png),latest=position(image);
+  if (!latest || Math.abs(previous.x-latest.x)>3 || Math.abs(previous.y-latest.y)>3) return false;
+  return hud((await matchTemplates(image,after.client)).anchors);
+}

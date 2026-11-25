@@ -1,10 +1,11 @@
 import http from 'node:http';
+import {readFile} from 'node:fs/promises';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PNG } from 'pngjs';
 import { createServer } from '../server.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
-import { stillMatches } from '../lib/vision.mjs';
+import { sameReadyOperator, stillMatches } from '../lib/vision.mjs';
 import { runAgent } from '../lib/agent.mjs';
 
 function makeFrame(red, blue) {
@@ -79,6 +80,28 @@ test('仅目标区域变化时也丢弃过期点击', () => {
   const after = { ...frame, png: PNG.sync.write(changed) };
   assert.equal(stillMatches({ ...frame, image }, after, {type:'tap',x:50,y:50}), false);
   assert.equal(stillMatches({ ...frame, image }, after, {type:'tap',x:200,y:100}), true);
+});
+
+test('干员被动画遮挡时核对两帧同位置的技能标记和战斗界面',async()=>{
+  const readTemplate=async name=>PNG.sync.read(await readFile(new URL(
+    '../../../resource/template/Battle/BattleFlag/'+name+'.png',import.meta.url)));
+  const badge=await readTemplate('BattleSkillReady'),hp=await readTemplate('BattleHpFlag');
+  function frame(red,markerX,showHud=true) {
+    const image=new PNG({width:1280,height:720});
+    image.data.fill(255);
+    if (showHud) PNG.bitblt(hp,image,0,0,hp.width,hp.height,670,12);
+    PNG.bitblt(badge,image,0,0,badge.width,badge.height,markerX,214);
+    for (let y=295;y<330;y++) for (let x=617;x<664;x++) {
+      const i=4*(y*image.width+x); image.data[i]=red; image.data[i+1]=0;
+    }
+    return {image,png:PNG.sync.write(image),width:1280,height:720,client:'com.hypergryph.arknights',
+      anchors:[{source:'Maa',label:'战斗防御点图标'}]};
+  }
+  const before=frame(0,624),after=frame(255,624),tap={type:'tap',x:640,y:310};
+  assert.equal(stillMatches(before,after,tap),false);
+  assert.equal(await sameReadyOperator(before,after,tap),true);
+  assert.equal(await sameReadyOperator(before,frame(255,635),tap),false);
+  assert.equal(await sameReadyOperator(before,frame(255,624,false),tap),false);
 });
 
 test('拖卡到作业格后只在新出现朝向框时确认方向', async () => {

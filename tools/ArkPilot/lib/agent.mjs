@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { hasFacingPrompt, recognize, stillMatches } from './vision.mjs';
+import { hasFacingPrompt, recognize, sameReadyOperator, stillMatches } from './vision.mjs';
 import { deploymentTarget } from './guides.mjs';
 import { decide } from './model.mjs';
 import { nativeAction } from './maa.mjs';
@@ -212,7 +212,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       await pause(action.ms, signal);
     } else {
       const current = await device.capture(signal);
-      if (!matches(frame, current, action)) {
+      if (!matches(frame, current, action) && !await sameReadyOperator(frame,current,action)) {
         staleCount++;
         emit({ type: 'stale', text: '画面已变化，跳过本次输入并重新判断。', turn });
         steps.push({ turn, action, note, result: '已跳过，画面变化' });
