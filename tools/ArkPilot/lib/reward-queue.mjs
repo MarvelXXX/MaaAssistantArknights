@@ -262,7 +262,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await writeFile(report+'.tmp',renderProgress(manifest,ledger));
     await rename(report+'.tmp',report);
   };
-  const notify = text => { emit({type:'checkpoint',text}); emit({type:'core',text}); };
+  const notify = text => emit({type:'checkpoint',text});
   const play = async (instruction, {limit, onStageEvent, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative = true, fixedTeam = false}, observe = onStageEvent) => {
     let result;
     const options={instruction, limit, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
