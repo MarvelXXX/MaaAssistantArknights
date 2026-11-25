@@ -24,6 +24,14 @@ function fixture(results, overrides = {}) {
     pause: async () => {}, plan: async () => answer(results.shift()), ...overrides };
   return { inputs, emitted, abort, params };
 }
+
+test('视频执行记录保留实际匹配的分 P', async () => {
+  const f = fixture([{type:'analyze_video',bv:'BV1uE421A7jm',stage:'AS-MO-1'},{type:'finish'}],{
+    device:null,readOnly:true,lookupGuide:async ()=>({part:8,timestamps:[10.5,15.5]}),
+  });
+  await runAgent(f.params);
+  assert.equal(f.emitted.find(e=>e.type==='applied').action.part,8);
+});
 test('画面变化后跳过旧点击，最后一次观察可以确认结果', async () => {
   const f = fixture([{ type:'tap', id:3 }, { type:'ask' }], { matches: () => false });
   await runAgent(f.params);

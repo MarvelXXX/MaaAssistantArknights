@@ -187,9 +187,11 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       catch (err) { signal.throwIfAborted(); result = {error:err.message}; emit({type:'research_error',text:err.message}); }
       if (action.type === 'load_guide' && !result?.error) adaptation = null;
       if (action.type === 'adapt_guide') adaptation = result;
-      steps.push({turn,action,note,result});
+      const executed = action.type === 'analyze_video' && Number.isInteger(result?.part)
+        ? {...action,part:result.part} : action;
+      steps.push({turn,action:executed,note,result});
       actionCount++;
-      if (!result?.error) emit({type:'applied',turn,action});
+      if (!result?.error) emit({type:'applied',turn,action:executed});
       continue;
     }
     if (action.type === 'maa') {
