@@ -151,6 +151,24 @@ function renderProgress(manifest, ledger) {
   return lines.join('\n')+'\n';
 }
 
+export async function runRewardStage(runCommand,options) {
+  const session = new AbortController();
+  const signal = AbortSignal.any([options.signal,session.signal]);
+  try {
+    await runCommand({...options,signal,emit:event=>{
+      options.emit(event);
+      if (event.type!=='frame') return;
+      const text=event.anchors.map(a=>a.label).join('').replace(/\s/g,'');
+      if (/登录认证已失效.{0,5}重新登录|登錄認證已失效.{0,5}重新登錄/.test(text)) {
+        session.abort(Object.assign(new Error('游戏登录认证已失效。'),{code:'GAME_SESSION_EXPIRED'}));
+      }
+    }});
+  } finally {
+    options.signal.throwIfAborted();
+    session.signal.throwIfAborted();
+  }
+}
+
 export async function runRewardQueue({filename, serial, device, config, runCommand, emit, signal}) {
   async function loadManifest() {
     const data = JSON.parse((await readFile(filename,'utf8')).replace(/^\uFEFF/,''));
@@ -179,11 +197,14 @@ export async function runRewardQueue({filename, serial, device, config, runComma
   const notify = text => { emit({type:'checkpoint',text}); emit({type:'core',text}); };
   const play = async (instruction, {limit, onFrame, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative = true, fixedTeam = false}) => {
     let result;
-    await runCommand({instruction, limit, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
+    const options={instruction, limit, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
       if (e.type === 'end') { result = e; return; }
       if (e.type === 'frame') onFrame?.(e);
       emit(e);
-    }});
+    }};
+    if (onFrame) await runRewardStage(runCommand,options);
+    else await runCommand(options);
+    if (!onFrame && result?.outcome==='ask') throw new Error(result.note || '游戏需要手动完成原账号登录。');
     return result?.note?.trim() || '未完成';
   };
   const homeWallet = async () => {
@@ -192,11 +213,12 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     catch (error) {
       signal.throwIfAborted();
       if (error.message.includes('UID')) throw error;
-      await play('回到当前游戏账号的首页，若有结算请先观察再退出，有未结束的实战等到结算。仅可用原账号正常快捷登录。停在首页，不领取其他奖励。'+spendRule,{limit:30,allowNative:false});
+      await play('回到当前游戏账号的首页，若有结算请先观察再退出，有未结束的实战等到结算。认证失效可确认后使用设备记住的原账号快捷登录。若要求短信、扫码、密码或提示其他设备在线，停在该页并 ask。停在首页，不领取其他奖励。'+spendRule,{limit:30,allowNative:false});
       return read();
     }
   };
   let wallet = await homeWallet();
+  let restoredTarget;
   const imageFile = (id, type, preview) => writeFile(path.join(dir,id+'-'+type+'.jpg'),Buffer.from(preview.split(',')[1],'base64'));
   await imageFile('session','home',wallet.image);
   notify('已核对首页，至纯源石 '+wallet.prime+'，合成玉 '+wallet.orundum+'。');
@@ -257,7 +279,18 @@ export async function runRewardQueue({filename, serial, device, config, runComma
             if (/已完成模拟作战|获得物资|结算三星标志|磨难结算标志|行动结束/.test(labels)) evidence=e.preview;
           }
         });
-    } catch (error) { signal.throwIfAborted(); report='未完成 '+error.message; }
+    } catch (error) {
+      signal.throwIfAborted();
+      if (error.code==='GAME_SESSION_EXPIRED') {
+        if (restoredTarget===t.id) throw new Error('同一关再次出现登录认证失效，已保留进度。');
+        notify('游戏登录认证失效，保留本局记录。正在恢复原账号并核对到账情况。');
+        wallet=await homeWallet();
+        restoredTarget=t.id;
+        continue;
+      }
+      report='未完成 '+error.message;
+    }
+    restoredTarget=undefined;
     wallet = await homeWallet();
     // An interrupted successful battle may already have been credited on this run's first frame.
     if (previous.status === '进行中' && report.startsWith('原已完成') &&

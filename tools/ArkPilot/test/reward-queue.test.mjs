@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {nextRewardGuide, reconcileReward, selectRewardTarget, verifyWalletAccount} from '../lib/reward-queue.mjs';
+import {nextRewardGuide, reconcileReward, runRewardStage, selectRewardTarget, verifyWalletAccount} from '../lib/reward-queue.mjs';
 import {watchBattlePause,watchTutorialDialog} from '../lib/maa.mjs';
 
 test('首通须有实机结论和对应余额变化，已通关不重复记账', () => {
@@ -30,6 +30,19 @@ test('理智和结晶不足时继续独立目标，保留待复核和前置关�
 test('恢复时先核对中断项，避免把另一关的奖励记到旧账上', () => {
   const targets=[{id:'new',requires:[]},{id:'interrupted',requires:[]}];
   assert.equal(selectRewardTarget(targets,{items:{interrupted:{status:'进行中'}},opened:{}},0).id,'interrupted');
+});
+
+test('登录认证失效会中断在途作业，即使工作进程随后报普通失败',async()=>{
+  const options={signal:AbortSignal.timeout(3000),emit:()=>{}};
+  await assert.rejects(runRewardStage(async({emit,signal})=>{
+    emit({type:'frame',anchors:[{label:'登录认证已失效 ， 请重新登录'}]});
+    assert.equal(signal.aborted,true);
+    throw new Error('task chain incomplete');
+  },options),{code:'GAME_SESSION_EXPIRED'});
+  await runRewardStage(async({emit,signal})=>{
+    emit({type:'frame',anchors:[{label:'当日登录奖励'}]});
+    assert.equal(signal.aborted,false);
+  },options);
 });
 
 test('从实战记录和旧进度中跳过失败作业，保留按练度选择攻略的路线', () => {
