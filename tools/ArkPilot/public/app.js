@@ -219,6 +219,7 @@ async function submit(event, native = null, label = '') {
       else if (e.type === 'research_error') { if (step) step.textContent = e.text; else addStep(e.text); }
       else if (e.type === 'guide_search') { $('stageSearch').value = e.stage; $('stageSearch').oninput(); guides.showResults(e.results); }
       else if (e.type === 'model') $('modelLight').title = e.model;
+      else if (e.type === 'checkpoint') addStep(e.text);
       else if (e.type === 'core') { reply.textContent = 'Maa · ' + e.text; if (step) step.textContent = reply.textContent; }
       else if (e.type === 'status') reply.textContent = '第 ' + e.turn + ' 次观察 · ' + e.text;
       else if (e.type === 'decision') {

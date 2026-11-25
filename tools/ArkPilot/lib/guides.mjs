@@ -42,7 +42,9 @@ async function stageAliases(query) {
   const same = value => typeof value === 'string' && value.toLowerCase() === text.toLowerCase();
   const rows = (await overview).filter(s => [s.code,s.name,s.stageId,s.levelId].some(same));
   const row = rows.find(s => !s.stageId.includes('#')) || rows[0];
-  return { id: row?.stageId || text, row, aliases: [text, ...rows.flatMap(s => [s.stageId,s.code,s.name,s.levelId])].map(s => s.toLowerCase()) };
+  const id = row?.stageId || text;
+  const searchIds = [id, ...rows.filter(s => same(s.name) && !s.stageId.includes('#')).map(s => s.stageId)];
+  return {id, row, searchIds:[...new Set(searchIds)], aliases:[text, ...rows.flatMap(s => [s.stageId,s.code,s.name,s.levelId])].map(s => s.toLowerCase())};
 }
 
 export async function stageBoard(stage) {
@@ -56,6 +58,15 @@ export async function paradoxStageId(plan) {
   if (!plan) return null;
   const {row} = await stageAliases(plan.stage_name);
   return row?.levelId.startsWith('obt/memory/') ? row.stageId : null;
+}
+
+export async function matchesRewardStage(plan, stageId) {
+  if (!plan) return false;
+  const {row} = await stageAliases(stageId);
+  if (!row) return plan.stage_name.toLowerCase() === stageId.toLowerCase();
+  const {row:actual} = await stageAliases(plan.stage_name);
+  if (!actual) return false;
+  return actual.stageId === row.stageId || actual.levelId === row.levelId;
 }
 
 // Project the tile in the tilted deployment view, as in Arknights-Tile-Pos/TileCalc2.hpp.
@@ -97,21 +108,26 @@ export async function publicJson(url, signal, headers = {}, maxBytes = 4 * 1024 
 
 export async function searchGuides(query, signal, videoCode = '', includeVideos = false) {
   if (videoCode && !/^BV[a-zA-Z0-9]{10}$/.test(videoCode)) throw new Error('视频编号无效。');
-  const { id, aliases } = await stageAliases(query);
-  const url = new URL('query', station);
-  url.search = new URLSearchParams({ page:'1', limit:videoCode ? '50' : '20', orderBy:'views', desc:'true', levelKeyword:id });
-  const reply = await publicJson(url, signal);
-  if (reply.status_code !== 200 || !Array.isArray(reply.data?.data)) throw new Error('作业站搜索失败。');
-  return reply.data.data.flatMap(item => {
-    try {
-      const plan = JSON.parse(item.content);
-      if (!idPattern.test(String(item.id)) || !aliases.includes(plan.stage_name.toLowerCase())) return [];
-      if (videoCode && !(String(plan.doc?.details || '') + ' ' + String(plan.doc?.title || '')).includes(videoCode)) return [];
-      const row = { id: String(item.id), title: String(plan.doc?.title || plan.stage_name).slice(0,150) };
-      if (includeVideos) row.videos = [...new Set(String(plan.doc?.details || '').match(/BV[a-zA-Z0-9]{10}/g) || [])].slice(0,3);
-      return [row];
-    } catch { return []; }
-  });
+  const {searchIds, aliases} = await stageAliases(query);
+  const matches = new Map();
+  for (const id of searchIds) {
+    const url = new URL('query', station);
+    url.search = new URLSearchParams({page:'1', limit:videoCode ? '50' : '20', orderBy:'views', desc:'true', levelKeyword:id});
+    const reply = await publicJson(url, signal);
+    if (reply.status_code !== 200 || !Array.isArray(reply.data?.data)) throw new Error('作业站搜索失败。');
+    for (const item of reply.data.data) {
+      try {
+        const plan = JSON.parse(item.content);
+        if (!idPattern.test(String(item.id)) || !aliases.includes(plan.stage_name.toLowerCase())) continue;
+        if (videoCode && !(String(plan.doc?.details || '') + ' ' + String(plan.doc?.title || '')).includes(videoCode)) continue;
+        const row = { id: String(item.id), title: String(plan.doc?.title || plan.stage_name).slice(0,150) };
+        if (includeVideos) row.videos = [...new Set(String(plan.doc?.details || '').match(/BV[a-zA-Z0-9]{10}/g) || [])].slice(0,3);
+        if (searchIds.length > 1) row.stage = plan.stage_name;
+        matches.set(row.id,row);
+      } catch { continue; }
+    }
+  }
+  return [...matches.values()];
 }
 
 function planId(value) {

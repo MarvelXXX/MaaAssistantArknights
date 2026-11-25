@@ -117,12 +117,11 @@ async function deployFromGuide(action, guide, frame, device, signal, pause) {
 }
 
 export async function runAgent({ config, device, instruction, history, readOnly, limit, signal, emit,
-  runNative, guidance, lookupGuide,
+  runNative, guidance, lookupGuide, requireAdaptation = wantsAdaptedPlan(instruction),
   observe = recognize, plan = decide, matches = stillMatches, pause = (ms, s) => delay(ms, undefined, { signal: s }) }) {
   const steps = [];
   const attemptedTasks = new Set();
   const protectsCurrency = noPremiumSpend.test(instruction);
-  const requestedAdaptation = wantsAdaptedPlan(instruction);
   let adaptation, rejectedInput;
   let staleCount = 0, actionCount = 0, previousInput, identicalInputs = 0;
   const recent = () => steps.length <= 18 ? steps : [...steps.slice(0, 3), ...steps.slice(-15)];
@@ -158,7 +157,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     }
     rejectedInput = undefined;
     signal.throwIfAborted();
-    if (decision.action.type === 'finish' && requestedAdaptation && guidance?.roster && guidance.plan) {
+    if (decision.action.type === 'finish' && requireAdaptation && guidance?.roster && guidance.plan) {
       if (!adaptation) decision = {...decision,intent:'inspect',note:'正在生成并校验所要求的替补作业。',action:{type:'adapt_guide'}};
       else if (!adaptation.ready) decision = {...decision,note:adaptation.reason || adaptation.error || '未生成适配作业。',action:{type:'ask'}};
     }

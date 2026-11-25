@@ -4,16 +4,18 @@ import { pipeline } from 'node:stream/promises';
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { parseEnv } from 'node:util';
 import path from 'node:path';
 import { listDevices, connectDevice, selectDevice } from './lib/device.mjs';
 import { recognize } from './lib/vision.mjs';
 import { chooseModel, listModels, explainFrames, proposeTeam } from './lib/model.mjs';
 import { runAgent } from './lib/agent.mjs';
 import { chapterRewards, stageRewards } from './lib/rewards.mjs';
-import { briefPlan, checkPlan, importGuide, openBiliMedia, paradoxStageId, searchGuides } from './lib/guides.mjs';
+import { briefPlan, checkPlan, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from './lib/guides.mjs';
 import { executeMaa, maaHome, nativeAction, recognizeRecording, scanRoster } from './lib/maa.mjs';
 import { adaptGuide, assess, normalizeRoster } from './lib/roster.mjs';
 import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
+import { runRewardQueue } from './lib/reward-queue.mjs';
 
 const staticFiles = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
 staticFiles.set('/guides.js', ['guides.js', 'text/javascript']);
@@ -163,16 +165,20 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         case '/api/run': break;
         default: return json(res, 404, { error: '未知接口。' });
       }
-      let guide = data.guide == null ? null : checkPlan(data.guide);
+      const attachedGuide = data.guide == null ? null : checkPlan(data.guide);
       const roster = data.roster ? await normalizeRoster(data.roster) : null;
-      let adaptationBlocked = false;
-      let formation = data.formation === true;
       const researchOnly = data.researchOnly === true;
-      const direct = data.native ? nativeAction(data.native,!!guide) : null;
+      const direct = data.native ? nativeAction(data.native,!!attachedGuide) : null;
       if (direct && (data.readOnly === true || researchOnly)) throw new Error('当前为只读分析，请切换到允许操作再运行 Maa。');
       const config = direct ? null : modelConfig(data);
       const instruction = data.instruction?.trim();
       if (!instruction || instruction.length > 4000) throw new Error('指令长度应在 1 至 4000 字之间。');
+      const queue = instruction === '/首通清单';
+      const queueFile = queue && (process.env.ARK_REWARD_QUEUE ||
+        parseEnv(await readFile(new URL('./.env',import.meta.url),'utf8').catch(()=> '')).ARK_REWARD_QUEUE);
+      if (queue && (direct || researchOnly || data.readOnly || !config?.vision || !queueFile)) {
+        throw new Error('首通清单需要已配置的本地清单、视觉模型和允许操作模式。');
+      }
       const limit = data.limit ?? 24;
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('步数上限应为 1 至 100。');
       if (active) return json(res, 409, { error: '已有指令在执行，请在原对话中停止或等待结束。' });
@@ -182,104 +188,118 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         const home = await getHome();
         if (config) config.model = await chooseModel(config, signal);
         const emit = eventStream(res);
-        const runNative = async a => {
-          const paradox = (a.task === 'Copilot' || a.task === 'ParadoxCopilot') && await paradoxStageId(guide);
-          if (a.task === 'ParadoxCopilot' && !paradox) throw Object.assign(new Error('请先导入目标悖论模拟的作业。'),{beforeStart:true});
-          if (a.task === 'Copilot' && !paradox && (adaptationBlocked || roster && assess(guide,roster).some(s=>
-            !s.choices.some(c=>c.status === '持有且满足已知要求')))) throw Object.assign(new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。'),{beforeStart:true});
-          const observer = new AbortController();
-          const watching = AbortSignal.any([signal,observer.signal]);
-          let timer;
-          const updateFrame = async () => {
-            try {
-              const frame = await devicePreview(device, watching);
-              if (!watching.aborted) emit({type:'frame',...frame});
-            } catch {
-              // The native task monitors its own connection. Retry a missed preview on the next tick.
+        async function runCommand({instruction, signal, emit, history = [], guide = null, limit, expectedStage}) {
+          let adaptationBlocked = false;
+          let formation = data.formation === true;
+          const runNative = async a => {
+            if (expectedStage && (!['Copilot','ParadoxCopilot'].includes(a.task) || !await matchesRewardStage(guide,expectedStage))) {
+              throw Object.assign(new Error('当前作业不是本项首通目标，请用准确的关卡 ID 重新载入。'),{beforeStart:true});
             }
-            if (!watching.aborted) timer = setTimeout(updateFrame, 5000);
+            const paradox = (a.task === 'Copilot' || a.task === 'ParadoxCopilot') && await paradoxStageId(guide);
+            if (a.task === 'ParadoxCopilot' && !paradox) throw Object.assign(new Error('请先导入目标悖论模拟的作业。'),{beforeStart:true});
+            if (a.task === 'Copilot' && !paradox && (adaptationBlocked || roster && assess(guide,roster).some(s=>
+              !s.choices.some(c=>c.status === '持有且满足已知要求')))) throw Object.assign(new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。'),{beforeStart:true});
+            const observer = new AbortController();
+            const watching = AbortSignal.any([signal,observer.signal]);
+            let timer;
+            const updateFrame = async () => {
+              try {
+                const frame = await devicePreview(device, watching);
+                if (!watching.aborted) emit({type:'frame',...frame});
+              } catch {
+                // The native task monitors its own connection. Retry a missed preview on the next tick.
+              }
+              if (!watching.aborted) timer = setTimeout(updateFrame, 5000);
+            };
+            timer = setTimeout(updateFrame, 1500);
+            try {
+              return await native(a, {home,device,serial:data.serial,guide,formation,signal,progress:text=>emit({type:'core',text})});
+            } finally {
+              observer.abort();
+              clearTimeout(timer);
+            }
           };
-          timer = setTimeout(updateFrame, 1500);
-          try {
-            return await native(a, {home,device,serial:data.serial,guide,formation,signal,progress:text=>emit({type:'core',text})});
-          } finally {
-            observer.abort();
-            clearTimeout(timer);
+          if (direct) {
+            emit({type:'decision',action:direct,goal:instruction,note:'正在运行 Maa 任务'});
+            await runNative(direct);
+            emit({type:'applied',action:direct});
+            emit({type:'end',outcome:'finish',goal:instruction,note:'Maa 已报告 ' + direct.task + ' 任务链执行结束。'});
+            return;
           }
-        };
-        if (direct) {
-          emit({type:'decision',action:direct,goal:instruction,note:'正在运行 Maa 任务'});
-          await runNative(direct);
-          emit({type:'applied',action:direct});
-          emit({type:'end',outcome:'finish',goal:instruction,note:'Maa 已报告 ' + direct.task + ' 任务链执行结束。'});
-          return res.end();
+          emit({ type: 'model', model: config.model });
+          const guidance = {notes:!queue && typeof data.notes === 'string' ? data.notes.slice(0,6000) : '',plan:briefPlan(guide),
+            roster:roster && {complete:roster.complete,operators:roster.operators.map(({name,owned,role,elite,level})=>({name,owned,role,elite,level}))}};
+          const candidates = new Set(instruction.match(/\b[1-9]\d{0,9}\b/g) || []);
+          if (!queue && Array.isArray(data.recentSearch)) {
+            guidance.candidates = data.recentSearch.slice(0,20).filter(r => typeof r?.id === 'string' && /^[1-9]\d{0,9}$/.test(r.id))
+              .map(r => ({id:r.id,title:String(r.title || '').slice(0,150)}));
+            for (const r of guidance.candidates) candidates.add(r.id);
+          }
+          const cache = new Map();
+          const excerpts = [];
+          const videoNotes = [];
+          const lookupGuide = async a => {
+            const key = JSON.stringify(a);
+            if (cache.has(key)) return cache.get(key);
+            if (a.type === 'stage_rewards' || a.type === 'chapter_rewards') {
+              const result = await (a.type === 'chapter_rewards' ? chapterRewards : stageRewards)(a.stage, signal);
+              emit({type:'sources', results:result.sources});
+              cache.set(key, result);
+              return result;
+            }
+            if (a.type === 'search_web') {
+              const found = await searchWeb(a.query,a.stage,signal);
+              for (const r of found.results) if (r.id) candidates.add(r.id);
+              emit({type:'sources',results:found.results}); cache.set(key,found); return found;
+            }
+            if (a.type === 'read_wiki') {
+              const page = await readWiki(a.title,a.section,signal);
+              excerpts.push({title:page.title,url:page.url,text:page.excerpt});
+              emit({type:'sources',results:[page]}); cache.set(key,page); return page;
+            }
+            if (a.type === 'analyze_video') {
+              const clip = await analyzeVideo(config,a,signal);
+              videoNotes.push({url:clip.url,notes:clip.notes});
+              guidance.notes = (clip.url+'\n'+clip.notes+'\n'+guidance.notes).slice(0,6000);
+              emit({type:'video_notes',clip,notes:guidance.notes}); cache.set(key,clip); return clip;
+            }
+            if (a.type === 'adapt_guide') {
+              adaptationBlocked = true;
+              if (!roster || !guide) throw new Error('适配需要已导入的作业和当前账号的干员名册。');
+              const recentRequests = history.filter(m=>m.role==='user').slice(-3).map(m=>m.text);
+              const result = await adaptGuide(guide,roster,guidance.notes,
+                m=>proposeTeam(config,{...m,instruction,recentRequests,wiki:excerpts.slice(-3),videos:videoNotes.slice(-2)},signal));
+              if (!result.ready) return {ready:false,reason:result.reason,assessment:result.assessment};
+              guide = result.plan; adaptationBlocked = false; formation = true; guidance.plan = briefPlan(guide);
+              guidance.notes = (result.reason+'\n'+guidance.notes).slice(0,6000);
+              emit({type:'guide_loaded',...result,notes:guidance.notes});
+              return {ready:true,reason:result.reason,changes:result.changes,plan:guidance.plan};
+            }
+            if (a.type === 'find_guide') {
+              const results = await searchGuides(a.stage,signal);
+              for (const r of results) candidates.add(r.id);
+              emit({type:'guide_search',stage:a.stage,results});
+              return results;
+            }
+            if (!candidates.has(a.id)) throw new Error('请先搜索关卡，或在指令里给出具体作业号。');
+            const material = await importGuide(a.id,signal);
+            guide = material.plan;
+            adaptationBlocked = false;
+            guidance.notes = (material.notes || guide.doc?.details || '').slice(0,6000);
+            formation = data.formation === true;
+            guidance.plan = briefPlan(guide);
+            emit({type:'guide_loaded',...material});
+            return guidance.plan;
+          };
+          await runAgent({ config, device, instruction, history, requireAdaptation:queue ? false : undefined,
+            readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home ? runNative : null });
         }
-        emit({ type: 'model', model: config.model });
-        const guidance = {notes:typeof data.notes === 'string' ? data.notes.slice(0,6000) : '',plan:briefPlan(guide),
-          roster:roster && {complete:roster.complete,operators:roster.operators.map(({name,owned,role,elite,level})=>({name,owned,role,elite,level}))}};
-        const candidates = new Set(instruction.match(/\b[1-9]\d{0,9}\b/g) || []);
-        if (Array.isArray(data.recentSearch)) {
-          guidance.candidates = data.recentSearch.slice(0,20).filter(r => typeof r?.id === 'string' && /^[1-9]\d{0,9}$/.test(r.id))
-            .map(r => ({id:r.id,title:String(r.title || '').slice(0,150)}));
-          for (const r of guidance.candidates) candidates.add(r.id);
+        if (queue) {
+          await runRewardQueue({filename:queueFile, serial:data.serial,
+            device, config, runCommand, emit, signal:controller.signal});
+        } else {
+          await runCommand({instruction, signal, emit, history:historyFrom(data.history), guide:attachedGuide, limit});
         }
-        const cache = new Map();
-        const excerpts = [];
-        const videoNotes = [];
-        const lookupGuide = async a => {
-          const key = JSON.stringify(a);
-          if (cache.has(key)) return cache.get(key);
-          if (a.type === 'stage_rewards' || a.type === 'chapter_rewards') {
-            const result = await (a.type === 'chapter_rewards' ? chapterRewards : stageRewards)(a.stage, signal);
-            emit({type:'sources', results:result.sources});
-            cache.set(key, result);
-            return result;
-          }
-          if (a.type === 'search_web') {
-            const found = await searchWeb(a.query,a.stage,signal);
-            for (const r of found.results) if (r.id) candidates.add(r.id);
-            emit({type:'sources',results:found.results}); cache.set(key,found); return found;
-          }
-          if (a.type === 'read_wiki') {
-            const page = await readWiki(a.title,a.section,signal);
-            excerpts.push({title:page.title,url:page.url,text:page.excerpt});
-            emit({type:'sources',results:[page]}); cache.set(key,page); return page;
-          }
-          if (a.type === 'analyze_video') {
-            const clip = await analyzeVideo(config,a,signal);
-            videoNotes.push({url:clip.url,notes:clip.notes});
-            guidance.notes = (clip.url+'\n'+clip.notes+'\n'+guidance.notes).slice(0,6000);
-            emit({type:'video_notes',clip,notes:guidance.notes}); cache.set(key,clip); return clip;
-          }
-          if (a.type === 'adapt_guide') {
-            adaptationBlocked = true;
-            if (!roster || !guide) throw new Error('适配需要已导入的作业和当前账号的干员名册。');
-            const recentRequests = historyFrom(data.history).filter(m=>m.role==='user').slice(-3).map(m=>m.text);
-            const result = await adaptGuide(guide,roster,guidance.notes,
-              m=>proposeTeam(config,{...m,instruction,recentRequests,wiki:excerpts.slice(-3),videos:videoNotes.slice(-2)},signal));
-            if (!result.ready) return {ready:false,reason:result.reason,assessment:result.assessment};
-            guide = result.plan; adaptationBlocked = false; formation = true; guidance.plan = briefPlan(guide);
-            guidance.notes = (result.reason+'\n'+guidance.notes).slice(0,6000);
-            emit({type:'guide_loaded',...result,notes:guidance.notes});
-            return {ready:true,reason:result.reason,changes:result.changes,plan:guidance.plan};
-          }
-          if (a.type === 'find_guide') {
-            const results = await searchGuides(a.stage,signal);
-            for (const r of results) candidates.add(r.id);
-            emit({type:'guide_search',stage:a.stage,results});
-            return results;
-          }
-          if (!candidates.has(a.id)) throw new Error('请先搜索关卡，或在指令里给出具体作业号。');
-          const material = await importGuide(a.id,signal);
-          guide = material.plan;
-          guidance.notes = (material.notes || guide.doc?.details || '').slice(0,6000);
-          formation = data.formation === true;
-          guidance.plan = briefPlan(guide);
-          emit({type:'guide_loaded',...material});
-          return guidance.plan;
-        };
-        await runAgent({ config, device, instruction, history: historyFrom(data.history),
-          readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home ? runNative : null });
         res.end();
       } finally { active = false; }
     } catch (error) {

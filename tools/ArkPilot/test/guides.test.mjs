@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from '../server.mjs';
-import { checkPlan, deploymentTarget, importGuide, paradoxStageId, searchGuides } from '../lib/guides.mjs';
+import { checkPlan, deploymentTarget, importGuide, matchesRewardStage, paradoxStageId, searchGuides } from '../lib/guides.mjs';
 import { nativeAction } from '../lib/maa.mjs';
 import { runAgent, validateDecision } from '../lib/agent.mjs';
 import { explainFrames } from '../lib/model.mjs';
@@ -56,6 +56,17 @@ test('用关卡索引查询作业摘要，按同一 BV 过滤，再获取完整�
   assert.deepEqual(rows,[{id:'11',title:'令单核'}]);
   assert.deepEqual((await importGuide('maa://11',signal)).plan,plan);
   await assert.rejects(importGuide('https://example.org/11',signal),/支持/);
+});
+
+test('同名活动关和悖论能分别检索，首通任务核对实际关卡 ID', async t => {
+  t.mock.method(globalThis,'fetch',async url => {
+    const id=new URL(url).searchParams.get('levelKeyword');
+    const data=id==='mem_huang_1'?[{id:45047,content:JSON.stringify({stage_name:id,doc:{title:'煌'}})}]:[];
+    return Response.json({status_code:200,data:{data}});
+  });
+  assert.deepEqual(await searchGuides('一夫当关',getSignal()),[{id:'45047',title:'煌',stage:'mem_huang_1'}]);
+  assert.equal(await matchesRewardStage({stage_name:'BW-5'},'mem_huang_1'),false);
+  assert.equal(await matchesRewardStage({stage_name:'ZT-1'},'act29side_01'),true);
 });
 
 test('对话中查到的作业可调用 Maa，Maa 完成后再次截图', async () => {
