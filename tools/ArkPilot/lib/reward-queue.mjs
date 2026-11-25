@@ -149,9 +149,32 @@ function renderProgress(manifest, ledger) {
     '', '| 时间（北京时间） | 关卡 | 核验结果 | 源石 | 合成玉 |','| --- | --- | --- | ---: | ---: |'];
   for (const [id,row] of finished) {
     const at = new Date(row.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
-    lines.push('| '+at+' | '+titles.get(id)+' | ['+row.status+']('+encodeURIComponent(id+'-home.jpg')+') | '+row.after.prime+' | '+row.after.orundum+' |');
+    const walletLink = '['+row.status+']('+encodeURIComponent(id+'-home.jpg')+')';
+    const label = {result:'结算画面',stage:'战后关卡'}[row.evidence];
+    const proofLink = label ? ' · ['+label+']('+encodeURIComponent(id+'-'+row.evidence+'.jpg')+')' : '';
+    lines.push('| '+at+' | '+titles.get(id)+' | '+walletLink+proofLink+' | '+row.after.prime+' | '+row.after.orundum+' |');
   }
   return lines.join('\n')+'\n';
+}
+
+export function rewardEvidence(stage) {
+  let battleSeen = false, best;
+  return {
+    observe(event) {
+      if (event.type === 'applied' && ['Copilot','ParadoxCopilot','Fight'].includes(event.action?.task)) battleSeen = true;
+      if (event.type !== 'frame' || !event.preview) return;
+      const text = event.anchors.map(a=>a.label).join('').replace(/\s/g,'');
+      if (text.includes('战斗防御点图标')) battleSeen = true;
+      // The home navigation overlay leaves the stage and its reward text visible underneath.
+      if (text.includes('公开招募') && /采购中心|干员寻访|档案/.test(text)) return;
+      let score;
+      if (/获得物资|结算三星标志|结算二星标志|磨难结算标志|行动结束/.test(text)) score = 3;
+      else if (text.includes('已完成模拟作战')) score = 2;
+      else if (battleSeen && stage?.startsWith('mem_') && /悖论模拟开始按钮|开始模拟/.test(text)) score = 1;
+      if (score && (!best || score > best.score)) best = {score,kind:score === 1 ? 'stage' : 'result',preview:event.preview};
+    },
+    get best() { return best; },
+  };
 }
 
 export async function runRewardStage(runCommand,options) {
@@ -198,16 +221,16 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await rename(report+'.tmp',report);
   };
   const notify = text => { emit({type:'checkpoint',text}); emit({type:'core',text}); };
-  const play = async (instruction, {limit, onFrame, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative = true, fixedTeam = false}) => {
+  const play = async (instruction, {limit, onStageEvent, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative = true, fixedTeam = false}) => {
     let result;
     const options={instruction, limit, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
       if (e.type === 'end') { result = e; return; }
-      if (e.type === 'frame') onFrame?.(e);
+      onStageEvent?.(e);
       emit(e);
     }};
-    if (onFrame) await runRewardStage(runCommand,options);
+    if (onStageEvent) await runRewardStage(runCommand,options);
     else await runCommand(options);
-    if (!onFrame && result?.outcome==='ask') throw new Error(result.note || '游戏需要手动完成原账号登录。');
+    if (!onStageEvent && result?.outcome==='ask') throw new Error(result.note || '游戏需要手动完成原账号登录。');
     return result?.note?.trim() || '未完成';
   };
   const homeWallet = async () => {
@@ -254,7 +277,8 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     ledger.items[t.id] = {...previous, status:'进行中', attempts, before, started:new Date().toISOString()};
     await save();
     notify(t.label+'，第 '+attempts+' 次核查。');
-    let report, evidence, usedGuide;
+    const evidence = rewardEvidence(t.stage);
+    let report, usedGuide;
     const offered = new Set(previous.offeredGuideIds || []);
     const failed = failedGuides(previous);
     const credited = previous.status==='进行中' && wallet[t.currency]-before[t.currency]===t.amount;
@@ -278,10 +302,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
         '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。若理智不足且画面可读，请写“理智不足，当前理智 X，关卡需 Y”。'+spendRule,{
           limit:75, expectedStage:t.stage, guide, guideId:guide ? candidate : undefined, onGuideStart:id=>{usedGuide=id;},
           resumeAfterStep:t.resumeAfterStep, allowNative:!credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
-          onFrame:e=>{
-            const labels = e.anchors.map(a=>a.label).join('').replace(/\s/g,'');
-            if (/已完成模拟作战|获得物资|结算三星标志|磨难结算标志|行动结束/.test(labels)) evidence=e.preview;
-          }
+          onStageEvent:evidence.observe,
         });
     } catch (error) {
       signal.throwIfAborted();
@@ -301,8 +322,11 @@ export async function runRewardQueue({filename, serial, device, config, runComma
         wallet[t.currency]-before[t.currency] === t.amount) report = '首通已核（中断后复核） '+report;
     const status = reconcileReward(t,report,before,wallet);
     await imageFile(t.id,'home',wallet.image);
-    if (evidence) await imageFile(t.id,'result',evidence);
     const row = ledger.items[t.id] = {status,attempts,before,after:numbers(wallet),note:report,at:new Date().toISOString()};
+    if (evidence.best) {
+      await imageFile(t.id,evidence.best.kind,evidence.best.preview);
+      row.evidence = evidence.best.kind;
+    }
     if (t.revision) row.revision = t.revision;
     if (usedGuide && status==='未完成') failed.add(usedGuide);
     if (failed.size) row.failedGuideIds = [...failed];

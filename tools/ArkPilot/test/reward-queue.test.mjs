@@ -1,7 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {nextRewardGuide, reconcileReward, runRewardStage, selectRewardTarget, verifyWalletAccount} from '../lib/reward-queue.mjs';
+import {nextRewardGuide, reconcileReward, rewardEvidence, runRewardStage, selectRewardTarget, verifyWalletAccount} from '../lib/reward-queue.mjs';
 import {watchBattlePause,watchTutorialDialog} from '../lib/maa.mjs';
+
+test('悖论凭证优先保留无遮挡结算，OCR漏读时仅保存战后关卡页', () => {
+  const first = rewardEvidence('mem_ifrit_1');
+  const frame = (preview, ...labels) => ({type:'frame',preview,anchors:labels.map(label=>({label}))});
+  const detail = frame('detail','悖论模拟开始按钮');
+  first.observe(detail);
+  assert.equal(first.best,undefined);
+  first.observe(frame('battle','战斗防御点图标'));
+  first.observe(detail);
+  assert.equal(first.best.kind,'stage');
+  first.observe(frame('menu','已完成模拟作战','公开招募','采购中心'));
+  assert.equal(first.best.preview,'detail');
+  first.observe(frame('done','已完成模拟作战'));
+  assert.equal(first.best.preview,'done');
+  first.observe(frame('stars','结算三星标志'));
+  first.observe(frame('fading','行动结束'));
+  first.observe(detail);
+  assert.equal(first.best.preview,'stars');
+  assert.equal(first.best.kind,'result');
+  const quick = rewardEvidence('mem_chen_1');
+  quick.observe({type:'applied',action:{type:'maa',task:'ParadoxCopilot'}});
+  quick.observe(detail);
+  assert.equal(quick.best.kind,'stage');
+  const other = rewardEvidence('main_00-01');
+  other.observe(frame('battle','战斗防御点图标'));
+  other.observe(detail);
+  assert.equal(other.best,undefined);
+});
 
 test('首通须有实机结论和对应余额变化，已通关不重复记账', () => {
   const t = {amount:200,currency:'orundum'};
