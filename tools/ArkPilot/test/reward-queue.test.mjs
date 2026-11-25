@@ -78,6 +78,19 @@ test('首通须有实机结论和对应余额变化，已通关不重复记账',
   assert.equal(reconcileReward(t,'首通已核',before,{...after,prime:99}),'余额下降');
 });
 
+test('免费奖励按实机领取报告和两种余额核对，活跃度或附带物资不计作货币', () => {
+  const target = {claimAvailable:true,currency:'orundum',amount:1};
+  const before = {prime:148,orundum:21378};
+  const daily = {...before,orundum:before.orundum+100};
+  const mail = {...before,prime:before.prime+1};
+  assert.equal(reconcileReward(target,'领取已核 日常合成玉到账',before,daily),'领取已核');
+  assert.equal(reconcileReward(target,'首通已核 邮件源石到账',before,mail),'领取已核');
+  assert.equal(reconcileReward(target,'领取已核',before,before),'余额待复核');
+  assert.equal(reconcileReward(target,'原已完成',before,mail),'余额待复核');
+  assert.equal(reconcileReward(target,'未完成 仅领取活跃度和龙门币',before,before),'未完成');
+  assert.equal(reconcileReward(target,'领取已核',before,{...daily,prime:147}),'余额下降');
+});
+
 test('理智和结晶不足时继续独立目标，保留待复核和前置关系', () => {
   const targets=[
     {id:'a',ap:10,requires:[]}, {id:'b',ap:0,requires:['a']},

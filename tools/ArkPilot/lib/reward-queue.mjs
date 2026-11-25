@@ -86,10 +86,12 @@ export function reconcileReward(target, report, before, after) {
   if (after.prime < before.prime || after.orundum < before.orundum) return '余额下降';
   const delta = after[target.currency] - before[target.currency];
   const receivedCurrency = after.prime > before.prime || after.orundum > before.orundum;
-  const obtained = target.claimAvailable === true ? receivedCurrency : delta === target.amount;
-  if (report.startsWith('首通已核') && obtained) return target.claimAvailable ? '领取已核' : '首通已核';
-  if (report.startsWith('原已完成') && delta === 0) return '原已完成';
-  if (delta !== 0 || report.startsWith('首通已核')) return '余额待复核';
+  const claim = target.claimAvailable === true;
+  const changed = claim ? receivedCurrency : delta !== 0;
+  const reported = report.startsWith('首通已核') || (claim && report.startsWith('领取已核'));
+  if (reported && (claim ? receivedCurrency : delta === target.amount)) return claim ? '领取已核' : '首通已核';
+  if (report.startsWith('原已完成') && !changed) return '原已完成';
+  if (changed || reported) return '余额待复核';
   if (report.startsWith('理智不足')) return '理智不足';
   if (report.startsWith('结晶不足')) return '结晶不足';
   if (report.startsWith('入口关闭')) return '入口关闭';
@@ -355,9 +357,12 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     const offered = new Set(previous.offeredGuideIds || []);
     const failed = failedGuides(previous);
     const credited = previous.status==='进行中' && wallet[t.currency]-before[t.currency]===t.amount;
-    const caution = credited ? '上次中断后余额已增加对应金额。仅去本关详情核对完成标志，不得再次开战。' :
-      previous.status === '进行中' ? '上轮中断，务必先核对本关已领取状态。' : '';
-    const previousNote = previous.note ? '上次观察：'+previous.note.slice(0,450)+'。更换失败的作业或阵容。' : '';
+    let caution = '';
+    if (previous.status === '进行中') {
+      if (t.claimAvailable) caution = '上轮中断，先核实本项是否已领取，以及是否还有未领取档位。';
+      else caution = credited ? '上次中断后余额已增加对应金额。仅去本关详情核对完成标志，不得再次开战。' : '上轮中断，务必先核对本关已领取状态。';
+    }
+    const previousNote = previous.note ? '上次观察：'+previous.note.slice(0,450)+'。' : '';
     const avoid = failed.size ? '之前未通过的作业号：'+[...failed].join('、')+'。' : '';
     try {
       let guide = t.plan;
@@ -372,8 +377,11 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       const source = candidate ? '（PRTS #'+candidate+'）' : '';
       const loaded = guide ? '已按真实关号载入作业'+source+'。优先用当前附件；如果名册、技能或练度不符，开战前可直接用 adapt_guide 换人，或用 find_guide 查找本关其他作业再 load_guide。若适配失败仍可换作业。' : '';
       const annihilation = t.stage?.startsWith('camp_') ? '本项核查剿灭数的一次性奖励。旧剿灭的剿灭战模拟也可打进度奖励。先在情报汇总核对档位、开启时间和开始行动按钮。周报酬已满或当前委托是另一张地图仍可打已开放的模拟。' : '';
-      report = await play('本轮只处理 '+t.label+'。'+t.route+'。'+caution+previousNote+avoid+loaded+annihilation+
-        '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。若理智不足且画面可读，请写“理智不足，当前理智 X，关卡需 Y”。'+spendRule,{
+      const instructions = t.claimAvailable
+        ? '在指定入口领取免费奖励。任务有连续档位时，收取当前已完成的任务活跃度，确认随附物资，再查看新出现的可领档位，直到目标货币到账或确无可领进度。记录目标货币数量和领取画面并返回首页。finish 用“领取已核”报告目标奖励到账，用“原已完成”报告此前已领或入口已清空。尚未达标时用“未完成”并写出实际剩余条件。'
+        : (previous.note ? '更换失败的作业或阵容。' : '')+
+          '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。若理智不足且画面可读，请写“理智不足，当前理智 X，关卡需 Y”。';
+      report = await play('本轮只处理 '+t.label+'。'+t.route+'。'+caution+previousNote+avoid+loaded+annihilation+instructions+spendRule,{
           limit:75, ap:t.ap, expectedStage:t.stage, guide, guideId:guide ? candidate : undefined, onGuideStart:id=>{usedGuide=id;},
           resumeAfterStep:t.resumeAfterStep, allowNative:!credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
           onStageEvent:evidence.observe,
@@ -392,7 +400,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     restoredTarget=undefined;
     wallet = await homeWallet(evidence.observe);
     // An interrupted successful battle may already have been credited on this run's first frame.
-    if (previous.status === '进行中' && report.startsWith('原已完成') &&
+    if (!t.claimAvailable && previous.status === '进行中' && report.startsWith('原已完成') &&
         wallet[t.currency]-before[t.currency] === t.amount) report = '首通已核（中断后复核） '+report;
     let status = reconcileReward(t,report,before,wallet);
     if (status==='余额待复核' && evidence.best && await verifiedFirstDrop(t,before,wallet,evidence.best.anchors)) {
