@@ -111,6 +111,23 @@ test('从实战记录和旧进度中跳过失败作业，保留按练度选择�
   assert.equal(nextRewardGuide({...target,plan:{}},row), undefined);
 });
 
+test('零理智关在实战失败后立即使用不同作业，其他等待仍然有效', () => {
+  const stage={id:'mem_glider_1',ap:0,requires:[],guideId:'37649',retryGuideIds:['21282']};
+  const row={status:'未完成',nextAt:100,failedGuideIds:['37649'],offeredGuideIds:['37649']};
+  const ledger={items:{[stage.id]:row},opened:{}};
+  assert.equal(selectRewardTarget([stage],ledger,10),stage);
+  assert.equal(nextRewardGuide(stage,row),'21282');
+  assert.equal(selectRewardTarget([{...stage,ap:9}],ledger,10),undefined);
+  assert.equal(selectRewardTarget([{...stage,requires:['locked']}],ledger,10),undefined);
+  assert.equal(selectRewardTarget([{...stage,plan:{}}],ledger,10),undefined);
+  row.failedGuideIds=[];
+  assert.equal(selectRewardTarget([stage],ledger,10),undefined);
+  row.note='失败作业号：37649';
+  assert.equal(selectRewardTarget([stage],ledger,10),stage);
+  row.offeredGuideIds.push('21282');
+  assert.equal(selectRewardTarget([stage],ledger,10),undefined);
+});
+
 test('待复核的战败只在增加可用新作业时恢复，到账异常持续保留', () => {
   const t={id:'t',requires:[],guideId:'101',retryGuideIds:['102']};
   const row={review:true,status:'未完成',note:'失败作业号：101',offeredGuideIds:['101','102']};
