@@ -17,6 +17,18 @@ function stoneRecovery(anchors) {
   return /是否(?:花费|消耗|使用)\d*[颗个]?(?:至纯)?源石(?:兑换|恢复)\d*点?理智/.test(text);
 }
 
+export async function dismissStoneRecovery(device, signal, observe = recognize, pause = delay) {
+  await device.input({type:'back'},signal);
+  let clearFrames = 0;
+  for (let attempt=0; attempt<5; attempt++) {
+    await pause(400,undefined,{signal});
+    const frame = await observe(await device.capture(signal),signal);
+    clearFrames = frame.anchors.length && !stoneRecovery(frame.anchors) ? clearFrames+1 : 0;
+    if (clearFrames===2) return;
+  }
+  throw new Error('已按返回键，尚未核实源石恢复弹窗关闭。');
+}
+
 function validateManifest(manifest, serial) {
   if (!manifest || manifest.serial !== serial || !manifest.account || !Array.isArray(manifest.targets) || !manifest.targets.length) {
     throw new Error('设备或账号清单不匹配。');
@@ -269,11 +281,13 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     catch (error) {
       signal.throwIfAborted();
       if (error.message.includes('UID')) throw error;
+      let instruction = '回到当前游戏账号的首页，若有结算请先观察再退出，有未结束的实战等到结算。认证失效可确认后使用设备记住的原账号快捷登录。若要求短信、扫码、密码或提示其他设备在线，停在该页并 ask。停在首页，不领取其他奖励。'+spendRule;
       if (error.code==='STONE_RECOVERY') {
-        await device.input({type:'back'},signal);
-        notify('已发送系统返回键，取消源石恢复。正在核对首页余额。');
+        await dismissStoneRecovery(device,signal);
+        notify('已核实源石恢复弹窗关闭。正在返回首页核对余额。');
+        instruction='源石恢复弹窗已经取消。现在从当前关卡详情返回首页：先打开左上方房屋图标的快捷导航，再点左侧首页，确认真实首页已经出现后 finish。只做返回导航，禁止再次点击开始行动、补充理智、消费源石或合成玉、领取其他奖励。';
       }
-      await play('回到当前游戏账号的首页，若有结算请先观察再退出，有未结束的实战等到结算。认证失效可确认后使用设备记住的原账号快捷登录。若要求短信、扫码、密码或提示其他设备在线，停在该页并 ask。停在首页，不领取其他奖励。'+spendRule,{limit:30,allowNative:false},observe);
+      await play(instruction,{limit:30,allowNative:false},observe);
       return read();
     }
   };

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {nextRewardGuide, reconcileReward, rewardEvidence, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
+import {dismissStoneRecovery, nextRewardGuide, reconcileReward, rewardEvidence, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
 import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
 
 test('摆完挂机后仅对持续敞开的同一名干员面板交回控制', () => {
@@ -132,6 +132,19 @@ test('付费理智弹窗中断当前作业并保留自然理智读数，库存�
   }
   await run([{source:'Maa',label:'理智药恢复提示'},{source:'OCR',label:'使用至纯源石恢复'}]);
   await run([{source:'OCR',label:'是否花费600合成玉进行寻访'}]);
+});
+
+test('取消源石恢复只发一次返回键，等待弹窗与过渡画面消失后才继续导航', async () => {
+  const prompt=[{source:'Maa',label:'源石恢复提示'}], detail=[{source:'OCR',label:'开始行动'}];
+  const frames=[prompt,[],detail,prompt,detail];
+  const inputs=[];
+  const device={input:async action=>inputs.push(action),capture:async()=>({anchors:frames.shift()})};
+  const run=()=>dismissStoneRecovery(device,AbortSignal.timeout(3000),async x=>x,async()=>{});
+  await assert.rejects(run(),/核实源石恢复弹窗关闭/);
+  frames.push(prompt,[],detail,detail);
+  await run();
+  assert.deepEqual(inputs,[{type:'back'},{type:'back'}]);
+  assert.equal(frames.length,0);
 });
 
 test('从实战记录和旧进度中跳过失败作业，保留按练度选择攻略的路线', () => {
