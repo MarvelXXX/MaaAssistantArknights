@@ -117,6 +117,23 @@ test('登录认证失效会中断在途作业，即使工作进程随后报普�
   },options);
 });
 
+test('付费理智弹窗中断当前作业并保留自然理智读数，库存药剂可继续', async () => {
+  const options={ap:21,signal:AbortSignal.timeout(3000),emit:()=>{}};
+  const run=anchors=>runRewardStage(async({emit,signal})=>{
+    emit({type:'decision',note:'当前自然理智为 17/210，关卡需 21。'});
+    emit({type:'frame',anchors});
+    signal.throwIfAborted();
+  },options);
+  for (const anchors of [
+    [{source:'Maa',label:'源石恢复提示'}],
+    [{source:'OCR',label:'是否花费 1 至纯源石兑换'},{source:'OCR',label:'理智？'}],
+  ]) {
+    await assert.rejects(run(anchors),e=>e.code==='STONE_RECOVERY' && e.message.startsWith('理智不足，当前理智 17，关卡需 21'));
+  }
+  await run([{source:'Maa',label:'理智药恢复提示'},{source:'OCR',label:'使用至纯源石恢复'}]);
+  await run([{source:'OCR',label:'是否花费600合成玉进行寻访'}]);
+});
+
 test('从实战记录和旧进度中跳过失败作业，保留按练度选择攻略的路线', () => {
   const target={id:'t',requires:[],guideId:'1001',retryGuideIds:['1002','1003']};
   const row={status:'未完成',note:'失败作业号：1002。',failedGuideIds:['1001']};

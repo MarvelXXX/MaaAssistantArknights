@@ -11,6 +11,12 @@ const minute = 60000;
 const closed = new Set(['首通已核', '领取已核', '原已完成']);
 const spendRule = '禁止消耗源石或合成玉，禁止兑换、充值、寻访、购买理智或切换账号。优先自然理智。仅在确认扣除的是库存理智药、源石用量为零时可用药，优先即将过期的药。';
 
+function stoneRecovery(anchors) {
+  if (anchors.some(a=>a.source==='Maa' && a.label==='源石恢复提示')) return true;
+  const text = anchors.map(a=>a.label).join('').replace(/\s/g,'');
+  return /是否(?:花费|消耗|使用)\d*[颗个]?(?:至纯)?源石(?:兑换|恢复)\d*点?理智/.test(text);
+}
+
 function validateManifest(manifest, serial) {
   if (!manifest || manifest.serial !== serial || !manifest.account || !Array.isArray(manifest.targets) || !manifest.targets.length) {
     throw new Error('设备或账号清单不匹配。');
@@ -115,6 +121,7 @@ async function captureWallet(device, config, signal) {
   let frame;
   for (let attempt=0;attempt<3;attempt++) {
     frame = await recognize(await device.capture(signal), signal);
+    if (stoneRecovery(frame.anchors)) throw Object.assign(new Error('正在显示源石恢复理智的确认框。'),{code:'STONE_RECOVERY'});
     const labels = frame.anchors.map(a=>a.label).join('').replace(/\s/g,'');
     const home = frame.anchors.some(a=>a.source==='Maa' && a.label==='主界面设置入口') ||
       /干员|角色管理/.test(labels) && /基建|终端|采购中心/.test(labels);
@@ -195,13 +202,21 @@ export function rewardEvidence(stage) {
 export async function runRewardStage(runCommand,options) {
   const session = new AbortController();
   const signal = AbortSignal.any([options.signal,session.signal]);
+  let available;
   try {
     await runCommand({...options,signal,emit:event=>{
       options.emit(event);
+      if (options.ap>0 && event.type==='decision') {
+        const match = event.note?.match(/当前(?:自然)?理智(?:为|是)?\s*(\d{1,3})(?!\d)/);
+        if (match) available = Number(match[1]);
+      }
       if (event.type!=='frame') return;
       const text=event.anchors.map(a=>a.label).join('').replace(/\s/g,'');
       if (/登录认证已失效.{0,5}重新登录|登錄認證已失效.{0,5}重新登錄/.test(text)) {
         session.abort(Object.assign(new Error('游戏登录认证已失效。'),{code:'GAME_SESSION_EXPIRED'}));
+      } else if (options.ap>0 && stoneRecovery(event.anchors)) {
+        const counts = available<options.ap ? '，当前理智 '+available+'，关卡需 '+options.ap : '';
+        session.abort(Object.assign(new Error('理智不足'+counts+'。检测到源石恢复确认框，本次作战未使用源石。'),{code:'STONE_RECOVERY'}));
       }
     }});
   } finally {
@@ -236,9 +251,9 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await rename(report+'.tmp',report);
   };
   const notify = text => { emit({type:'checkpoint',text}); emit({type:'core',text}); };
-  const play = async (instruction, {limit, onStageEvent, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative = true, fixedTeam = false}, observe = onStageEvent) => {
+  const play = async (instruction, {limit, onStageEvent, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative = true, fixedTeam = false}, observe = onStageEvent) => {
     let result;
-    const options={instruction, limit, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
+    const options={instruction, limit, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
       if (e.type === 'end') { result = e; return; }
       observe?.(e);
       emit(e);
@@ -254,6 +269,10 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     catch (error) {
       signal.throwIfAborted();
       if (error.message.includes('UID')) throw error;
+      if (error.code==='STONE_RECOVERY') {
+        await device.input({type:'back'},signal);
+        notify('已发送系统返回键，取消源石恢复。正在核对首页余额。');
+      }
       await play('回到当前游戏账号的首页，若有结算请先观察再退出，有未结束的实战等到结算。认证失效可确认后使用设备记住的原账号快捷登录。若要求短信、扫码、密码或提示其他设备在线，停在该页并 ask。停在首页，不领取其他奖励。'+spendRule,{limit:30,allowNative:false},observe);
       return read();
     }
@@ -341,7 +360,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       const annihilation = t.stage?.startsWith('camp_') ? '本项核查剿灭数的一次性奖励。旧剿灭的剿灭战模拟也可打进度奖励。先在情报汇总核对档位、开启时间和开始行动按钮。周报酬已满或当前委托是另一张地图仍可打已开放的模拟。' : '';
       report = await play('本轮只处理 '+t.label+'。'+t.route+'。'+caution+previousNote+avoid+loaded+annihilation+
         '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。若理智不足且画面可读，请写“理智不足，当前理智 X，关卡需 Y”。'+spendRule,{
-          limit:75, expectedStage:t.stage, guide, guideId:guide ? candidate : undefined, onGuideStart:id=>{usedGuide=id;},
+          limit:75, ap:t.ap, expectedStage:t.stage, guide, guideId:guide ? candidate : undefined, onGuideStart:id=>{usedGuide=id;},
           resumeAfterStep:t.resumeAfterStep, allowNative:!credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
           onStageEvent:evidence.observe,
         });
@@ -354,7 +373,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
         restoredTarget=t.id;
         continue;
       }
-      report='未完成 '+error.message;
+      report=error.code==='STONE_RECOVERY' ? error.message : '未完成 '+error.message;
     }
     restoredTarget=undefined;
     wallet = await homeWallet(evidence.observe);
