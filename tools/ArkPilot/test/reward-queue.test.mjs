@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dismissStoneRecovery, nextRewardGuide, reconcileReward, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
+import {dismissStoneRecovery, nextRewardGuide, reconcileReward, refreshSanityWait, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
 import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
 
 test('摆完挂机后仅对持续敞开的同一名干员面板交回控制', () => {
@@ -136,6 +136,34 @@ test('25 理智的剿灭等待期间可打 9 理智的关卡，恢复后可重�
   const ledger={items:{},opened:{},sanityCost:25,sanityWait:50};
   assert.equal(selectRewardTarget([expensive,cheap],ledger,10),cheap);
   assert.equal(selectRewardTarget([expensive,cheap],ledger,50),expensive);
+});
+
+test('打完低耗关后按首页理智重新排程，重复读数保留恢复时刻', () => {
+  const minute=60000, now=100*minute;
+  const main={id:'zt',ap:21,requires:[]}, cheap={id:'le',ap:9,requires:[]}, free={id:'mo',ap:0,requires:[]};
+  const targets=[main,cheap,free];
+  const ledger={items:{
+    zt:{status:'理智不足',nextAt:now+15*minute},
+    le:{status:'理智不足',nextAt:now+minute},
+    mo:{status:'未完成',nextAt:now+4*minute},
+  },opened:{},sanityCost:21,sanityWait:now+15*minute};
+  refreshSanityWait(targets,ledger,undefined,now);
+  assert.equal(ledger.sanityWait,now+15*minute);
+  refreshSanityWait(targets,ledger,7,now);
+  assert.equal(ledger.items.zt.nextAt,now+84*minute);
+  assert.equal(ledger.items.le.nextAt,now+12*minute);
+  assert.equal(ledger.items.mo.nextAt,now+4*minute);
+  assert.equal(ledger.sanityCost,9);
+  assert.equal(ledger.sanityWait,ledger.items.le.nextAt);
+  refreshSanityWait(targets,ledger,7,now+minute);
+  assert.equal(ledger.sanityWait,now+12*minute);
+  assert.equal(selectRewardTarget(targets,ledger,now+4*minute),free);
+  refreshSanityWait(targets,ledger,9,now+12*minute);
+  assert.equal(selectRewardTarget(targets,ledger,now+12*minute),cheap);
+  assert.equal(ledger.sanityCost,21);
+  refreshSanityWait(targets,ledger,25,now+13*minute);
+  assert.equal(selectRewardTarget(targets,ledger,now+13*minute),main);
+  assert.equal(ledger.sanityWait,undefined);
 });
 
 test('登录认证失效会中断在途作业，即使工作进程随后报普通失败',async()=>{

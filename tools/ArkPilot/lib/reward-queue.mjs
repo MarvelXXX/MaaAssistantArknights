@@ -82,6 +82,35 @@ export function selectRewardTarget(targets, ledger, now) {
   });
 }
 
+export function refreshSanityWait(targets, ledger, sanity, observedAt) {
+  if (!Number.isInteger(sanity) || sanity < 0 || sanity > 999 || !Number.isFinite(observedAt)) return;
+  let hasKnownCost = false;
+  let lowestCost = Infinity;
+  let nextAt;
+  for (const t of targets) {
+    const row = ledger.items[t.id];
+    if (row?.status !== '理智不足' || !(t.ap > 0)) continue;
+    hasKnownCost = true;
+    const missing = t.ap - sanity;
+    if (missing <= 0) {
+      delete row.nextAt;
+      continue;
+    }
+    // Keep the existing recovery tick when the fresh reading agrees with it.
+    if (Math.ceil((row.nextAt - observedAt) / (6 * minute)) !== missing) {
+      row.nextAt = observedAt + missing * 6 * minute;
+    }
+    if (t.ap < lowestCost || (t.ap === lowestCost && row.nextAt < nextAt)) {
+      lowestCost = t.ap;
+      nextAt = row.nextAt;
+    }
+  }
+  if (hasKnownCost) {
+    ledger.sanityCost = nextAt ? lowestCost : undefined;
+    ledger.sanityWait = nextAt;
+  }
+}
+
 export function reconcileReward(target, report, before, after) {
   if (after.prime < before.prime || after.orundum < before.orundum) return '余额下降';
   const delta = after[target.currency] - before[target.currency];
@@ -144,7 +173,7 @@ export async function rewardReceipt(target, before, after, anchors) {
 }
 
 function balanceDetail(image) {
-  const regions = [[0.65,0,0.34,0.13,2],[0,0.55,0.21,0.085,3]].map(([x,y,w,h,zoom]) =>
+  const regions = [[0.65,0,0.34,0.13,2],[0,0.55,0.21,0.085,3],[0.55,0.14,0.17,0.24,2]].map(([x,y,w,h,zoom]) =>
     ({x:Math.floor(x*image.width),y:Math.floor(y*image.height),w:Math.floor(w*image.width),h:Math.floor(h*image.height),zoom}));
   const width = Math.max(...regions.map(r=>r.w*r.zoom));
   const height = regions.reduce((sum,r)=>sum+r.h*r.zoom,0);
@@ -176,13 +205,15 @@ async function captureWallet(device, config, signal) {
     if (attempt === 2) throw new Error('当前截图不是可核对余额的首页。');
     await delay(650,undefined,{signal});
   }
+  const observedAt = Date.now();
   const reply = await decide({...config,toolsUnsupported:true}, {
-    instruction:'图上方是本次实机首页的货币栏，下方是账号 ID。严格用 finish，note 只写“余额 金色至纯源石整数 红色合成玉整数 游戏ID整数”，无逗号。分别读金色六边形源石图标右边、红色菱形合成玉图标右边、ID: 后面的数字，不包括龙门币、时间或加号。看不清则写“读数失败”。',
+    instruction:'图从上到下依次为首页货币栏、账号 ID、终端理智。严格用 finish，note 只写“余额 金色至纯源石整数 红色合成玉整数 游戏ID整数 当前理智整数”，无逗号。金色六边形和红色菱形各读图标右侧数字，ID 读 ID: 后的数字。这三项看不清写“读数失败”。当前理智读终端旁的大号数字，不读斜线后的上限；仅理智看不清时最后一项写 ?。',
     readOnly:true, turn:1, recentSteps:[], conversation:[], remainingActions:0,
   }, {...frame,preview:balanceDetail(frame.image),anchors:[]}, signal);
-  const m = /^余额\s+(\d{1,7})\s+(\d{1,9})\s+(\d{5,14})$/.exec(reply.note?.trim());
+  const m = /^余额\s+(\d{1,7})\s+(\d{1,9})\s+(\d{5,14})(?:\s+(\d{1,3}|\?))?$/.exec(reply.note?.trim());
   if (!m || reply.action?.type !== 'finish') throw new Error('未读到两种首页余额。');
-  return {prime:Number(m[1]), orundum:Number(m[2]), uid:m[3], image:frame.preview};
+  return {prime:Number(m[1]), orundum:Number(m[2]), uid:m[3], sanity:m[4] && m[4]!=='?' ? Number(m[4]) : undefined,
+    observedAt, image:frame.preview};
 }
 
 export async function verifyWalletAccount(capture, uid) {
@@ -199,7 +230,7 @@ export async function verifyWalletAccount(capture, uid) {
   throw new Error('连续读取首页仍不能核对游戏 UID，已停止。');
 }
 
-const numbers = wallet => ({prime:wallet.prime, orundum:wallet.orundum});
+const numbers = wallet => ({prime:wallet.prime, orundum:wallet.orundum, ...(wallet.sanity == null ? {} : {sanity:wallet.sanity})});
 
 function renderProgress(manifest, ledger) {
   const titles = new Map(manifest.targets.map(t=>[t.id,t.label.replace(/[|\r\n]/g,' ')]));
@@ -331,7 +362,8 @@ export async function runRewardQueue({filename, serial, device, config, runComma
   let restoredTarget;
   const imageFile = (id, type, preview) => writeFile(path.join(dir,id+'-'+type+'.jpg'),Buffer.from(preview.split(',')[1],'base64'));
   await imageFile('session','home',wallet.image);
-  notify('已核对首页，至纯源石 '+wallet.prime+'，合成玉 '+wallet.orundum+'。');
+  notify('已核对首页，至纯源石 '+wallet.prime+'，合成玉 '+wallet.orundum+
+    (wallet.sanity == null ? '' : '，当前理智 '+wallet.sanity)+'。');
   for (const target of manifest.targets) {
     const row = ledger.items[target.id];
     if (row?.status !== '余额待复核' || (!target.claimAvailable && (target.currency !== 'prime' || !target.stage))) continue;
@@ -366,6 +398,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       manifest = next;
       modified = changed;
     }
+    refreshSanityWait(manifest.targets,ledger,wallet.sanity,wallet.observedAt);
     const t = selectRewardTarget(manifest.targets,ledger,Date.now());
     if (!t) {
       const remaining = manifest.targets.filter(item=>!closed.has(ledger.items[item.id]?.status)).length;
@@ -376,6 +409,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
         return;
       }
       const next = Math.min(...future);
+      await save();
       notify('等待游戏资源或关卡开放，下次检查 '+new Date(next).toLocaleString('zh-CN')+'。');
       await delay(Math.min(next-Date.now(),60*minute),undefined,{signal});
       wallet = await homeWallet();
