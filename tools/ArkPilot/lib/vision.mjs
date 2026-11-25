@@ -122,6 +122,27 @@ export async function recognize(frame, signal) {
   } finally { rgba.delete(); small.delete(); }
 }
 
+export function hasFacingPrompt(before, after, target) {
+  if (before.width !== after.width || before.height !== after.height || before.client !== after.client) return false;
+  const old = before.image || pixels(before.png), latest = pixels(after.png);
+  // The red cancel tile appears to the upper left of the deployment diamond.
+  const left = Math.max(0,Math.floor(target.x - after.width * 0.20));
+  const top = Math.max(0,Math.floor(target.y - after.height * 0.27));
+  const right = Math.min(after.width,Math.ceil(target.x - after.width * 0.035));
+  const bottom = Math.min(after.height,Math.ceil(target.y - after.height * 0.035));
+  let red = 0, white = 0, samples = 0;
+  function isRed(data,i) { return data[i] > 95 && data[i] > data[i+1] * 2.5 && data[i] > data[i+2] * 2.5; }
+  for (let y = top; y < bottom; y += 3) {
+    for (let x = left; x < right; x += 3) {
+      const i = (y * after.width + x) * 4;
+      samples++;
+      if (isRed(latest.data,i) && !isRed(old.data,i)) red++;
+      if (latest.data[i] > 218 && latest.data[i+1] > 218 && latest.data[i+2] > 218) white++;
+    }
+  }
+  return samples > 0 && red > samples * 0.025 && white > samples * 0.004;
+}
+
 // Recheck both the scene and the target patch after model latency. Small animations
 // are tolerated, while a menu transition or a disappearing button triggers a new plan.
 export function stillMatches(observed, current, action) {

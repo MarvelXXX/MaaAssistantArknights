@@ -9,7 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { parseEnv, promisify } from 'node:util';
 import { adbPath } from './device.mjs';
-import { checkPlan } from './guides.mjs';
+import { checkPlan, paradoxStageId } from './guides.mjs';
 
 const worker = fileURLToPath(new URL('./maa-worker.ps1', import.meta.url));
 const execute = promisify(execFile);
@@ -29,7 +29,7 @@ export async function maaHome() {
 
 export function nativeAction(a, hasPlan) {
   if (a?.task === 'Award') return { type:'maa', task:'Award' };
-  if (a?.task === 'Copilot' && hasPlan) return { type:'maa', task:'Copilot' };
+  if (['Copilot','ParadoxCopilot'].includes(a?.task) && hasPlan) return { type:'maa', task:a.task };
   if (a?.task === 'Fight' && typeof a.stage === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(a.stage) &&
       a.stage.length <= 40 && Number.isInteger(a.times) && a.times >= 1 && a.times <= 100) {
     return { type:'maa', task:'Fight', stage:a.stage.toUpperCase(), times:a.times };
@@ -67,6 +67,7 @@ export async function runCore({ home, work, client = '', serial = '', type, para
       if (tag === 'version') { coreVersion = content; progress('MaaCore ' + content); return; }
       let info;
       try { info = JSON.parse(content); } catch { return; }
+      if (info.what === 'ScreencapCost' || info.what === 'EmulatorFPS') return;
       if (type === 'OperBox' && info.what === 'OperBoxInfo' && info.details?.done === true) onBox?.(info.details.own_opers);
       let name = String(info.why || info.what || info.details?.task || info.subtask || info.taskchain || '').slice(0,120);
       if (type === 'VideoRecognition' && Object.hasOwn(videoPhases,info.what)) {
@@ -123,14 +124,24 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
   const a = nativeAction(action, !!guide);
   return workspace(async work => {
     let params;
+    let type = a.task;
     if (a.task === 'Fight') params = {stage:a.stage, times:a.times, medicine:0, stone:0, expiring_medicine:0, medicine_expire_days:0};
     if (a.task === 'Award') params = {award:true, mail:false, recruit:false, orundum:false, mining:false, specialaccess:false};
-    if (a.task === 'Copilot') {
+    if (a.task === 'Copilot' || a.task === 'ParadoxCopilot') {
       const filename = path.join(work, 'plan.json');
-      await writeFile(filename, JSON.stringify(checkPlan(guide)), 'utf8');
-      params = {filename, formation:formation === true, loop_times:1, use_sanity_potion:false};
+      const plan = checkPlan(guide);
+      const stage = await paradoxStageId(plan);
+      if (a.task === 'ParadoxCopilot' && !stage) throw new Error('从干员列表启动悖论模拟需要对应的悖论作业。');
+      await writeFile(filename, JSON.stringify(stage ? {...plan,stage_name:stage} : plan), 'utf8');
+      if (stage) {
+        type = 'ParadoxCopilot';
+        // Maa accepts a list when it must find the operator and select the skill.
+        params = a.task === 'ParadoxCopilot' ? {list:[filename]} : {filename};
+      } else {
+        params = {filename, formation:formation === true, loop_times:1, use_sanity_potion:false};
+      }
     }
-    const job = {home, work, type:a.task, params, serial, prepare};
+    const job = {home, work, type, params, serial, prepare};
     if (prepare) return runCore(job, signal, progress);
     return connectedCore(job,device,signal,progress);
   });

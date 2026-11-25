@@ -10,7 +10,7 @@ import { recognize } from './lib/vision.mjs';
 import { chooseModel, listModels, explainFrames, proposeTeam } from './lib/model.mjs';
 import { runAgent } from './lib/agent.mjs';
 import { chapterRewards, stageRewards } from './lib/rewards.mjs';
-import { briefPlan, checkPlan, importGuide, openBiliMedia, searchGuides } from './lib/guides.mjs';
+import { briefPlan, checkPlan, importGuide, openBiliMedia, paradoxStageId, searchGuides } from './lib/guides.mjs';
 import { executeMaa, maaHome, nativeAction, recognizeRecording, scanRoster } from './lib/maa.mjs';
 import { adaptGuide, assess, normalizeRoster } from './lib/roster.mjs';
 import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
@@ -25,6 +25,10 @@ function eventStream(res) {
 function json(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(data));
+}
+async function devicePreview(device, signal) {
+  const { preview, width, height, client, anchors, recognition } = await recognize(await device.capture(signal), signal);
+  return { preview, width, height, client, anchors, recognition };
 }
 async function body(req, maxBytes = 524288) {
   let bytes = 0;
@@ -154,9 +158,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         case '/api/models': return json(res, 200, { models: await listModels(modelConfig(data), signal) });
         case '/api/preview': {
           const device = await getDevice(data.serial, signal);
-          const frame = await recognize(await device.capture(signal), signal);
-          return json(res, 200, { preview: frame.preview, width: frame.width, height: frame.height,
-            client: frame.client, anchors: frame.anchors, recognition: frame.recognition });
+          return json(res, 200, await devicePreview(device, signal));
         }
         case '/api/run': break;
         default: return json(res, 404, { error: '未知接口。' });
@@ -180,10 +182,30 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         const home = await getHome();
         if (config) config.model = await chooseModel(config, signal);
         const emit = eventStream(res);
-        const runNative = a => {
-          if (a.task === 'Copilot' && (adaptationBlocked || roster && assess(guide,roster).some(s=>
-            !s.choices.some(c=>c.status === '持有且满足已知要求')))) throw new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。');
-          return native(a, {home,device,serial:data.serial,guide,formation,signal,progress:text=>emit({type:'core',text})});
+        const runNative = async a => {
+          const paradox = (a.task === 'Copilot' || a.task === 'ParadoxCopilot') && await paradoxStageId(guide);
+          if (a.task === 'ParadoxCopilot' && !paradox) throw Object.assign(new Error('请先导入目标悖论模拟的作业。'),{beforeStart:true});
+          if (a.task === 'Copilot' && !paradox && (adaptationBlocked || roster && assess(guide,roster).some(s=>
+            !s.choices.some(c=>c.status === '持有且满足已知要求')))) throw Object.assign(new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。'),{beforeStart:true});
+          const observer = new AbortController();
+          const watching = AbortSignal.any([signal,observer.signal]);
+          let timer;
+          const updateFrame = async () => {
+            try {
+              const frame = await devicePreview(device, watching);
+              if (!watching.aborted) emit({type:'frame',...frame});
+            } catch {
+              // The native task monitors its own connection. Retry a missed preview on the next tick.
+            }
+            if (!watching.aborted) timer = setTimeout(updateFrame, 5000);
+          };
+          timer = setTimeout(updateFrame, 1500);
+          try {
+            return await native(a, {home,device,serial:data.serial,guide,formation,signal,progress:text=>emit({type:'core',text})});
+          } finally {
+            observer.abort();
+            clearTimeout(timer);
+          }
         };
         if (direct) {
           emit({type:'decision',action:direct,goal:instruction,note:'正在运行 Maa 任务'});

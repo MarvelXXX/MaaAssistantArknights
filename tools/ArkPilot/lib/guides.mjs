@@ -52,6 +52,35 @@ export async function stageBoard(stage) {
   return {tiles:map.tiles.map(row=>row.map(tile=>tile.buildableType)),terrain:map.tiles.map(row=>row.map(tile=>tile.tileKey))};
 }
 
+export async function paradoxStageId(plan) {
+  if (!plan) return null;
+  const {row} = await stageAliases(plan.stage_name);
+  return row?.levelId.startsWith('obt/memory/') ? row.stageId : null;
+}
+
+// Project the tile in the tilted deployment view, as in Arknights-Tile-Pos/TileCalc2.hpp.
+export async function deploymentTarget(stage, location, width, height) {
+  const {row} = await stageAliases(stage);
+  if (!row || Math.abs(width / height - 16 / 9) > 0.04) throw new Error('缺少本关的 16:9 部署地图。');
+  const map = JSON.parse(await readFile(path.join(resource,'Arknights-Tile-Pos',row.filename),'utf8'));
+  const [col, line] = location;
+  const tile = map.tiles[line]?.[col];
+  if (!tile?.buildableType) throw new Error('所选格不可部署。');
+  const [cx, cy, cz] = map.view[1];
+  const x = col - (map.width - 1) / 2 - cx;
+  const y = (map.height - 1) / 2 - line - cy;
+  const z = -0.4 * tile.heightType - cz;
+  const rad = Math.PI / 180;
+  const rotatedX = Math.cos(10 * rad) * x + Math.sin(10 * rad) * z;
+  const rotatedZ = -Math.sin(10 * rad) * x + Math.cos(10 * rad) * z;
+  const rotatedY = Math.cos(30 * rad) * y - Math.sin(30 * rad) * rotatedZ;
+  const depth = Math.sin(30 * rad) * y + Math.cos(30 * rad) * rotatedZ;
+  const scale = height / (2 * Math.tan(20 * rad) * depth);
+  const point = {x:Math.round(width / 2 + rotatedX * scale),y:Math.round(height / 2 - rotatedY * scale)};
+  if (point.x < 0 || point.x >= width || point.y < 0 || point.y >= height) throw new Error('部署格超出当前画面。');
+  return point;
+}
+
 export async function publicJson(url, signal, headers = {}, maxBytes = 4 * 1024 * 1024) {
   const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(18000)]), headers, redirect:'error' })
     .catch(() => { signal.throwIfAborted(); throw new Error('攻略站连接失败，请稍后重试或导入本地文件。'); });
@@ -93,6 +122,7 @@ function planId(value) {
 
 export function briefPlan(plan) {
   return plan && {stage:plan.stage_name,title:plan.doc?.title,opers:plan.opers?.slice(0,24),groups:plan.groups?.map(g => g.name).slice(0,24),
+    groupChoices:plan.groups?.slice(0,24).map(g=>({name:g.name,opers:g.opers.slice(0,24).map(({name,skill})=>({name,skill}))})),
     actionCount:plan.actions.length,actionsTruncated:plan.actions.length > 24,firstActions:plan.actions.slice(0,24)};
 }
 

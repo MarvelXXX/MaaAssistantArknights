@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from '../server.mjs';
-import { checkPlan, importGuide, searchGuides } from '../lib/guides.mjs';
+import { checkPlan, deploymentTarget, importGuide, paradoxStageId, searchGuides } from '../lib/guides.mjs';
 import { nativeAction } from '../lib/maa.mjs';
 import { runAgent, validateDecision } from '../lib/agent.mjs';
 import { explainFrames } from '../lib/model.mjs';
@@ -18,9 +18,26 @@ test('作业必须包含有效的部署与编队，模型无权传入原生任�
   assert.throws(() => checkPlan({...plan,actions:[{type:'Deploy',name:'令'}]}),/部署/);
   assert.throws(() => nativeAction({task:'Custom'},true));
   assert.throws(() => nativeAction({task:'Copilot'},false));
+  assert.throws(() => nativeAction({task:'ParadoxCopilot'},false));
   assert.deepEqual(nativeAction({task:'Fight',stage:'ce-6',times:2,stone:100}),{type:'maa',task:'Fight',stage:'CE-6',times:2});
   assert.throws(() => validateDecision(reply({type:'maa',task:'Award'}),{},true,true,true),/只读/);
   assert.equal(validateDecision(reply({type:'find_guide',stage:'1-7'},'inspect'),{},true,true).action.stage,'1-7');
+});
+
+test('悖论作业按游戏关卡数据匹配并使用专用导航任务', async () => {
+  for (const stage_name of ['睥睨','mem_svrash_1','obt/memory/level_memory_svrash_1']) {
+    assert.equal(await paradoxStageId({stage_name}),'mem_svrash_1');
+  }
+  assert.equal(await paradoxStageId(plan),null);
+  assert.equal(await paradoxStageId({stage_name:'mem_nonexistent_1'}),null);
+  assert.deepEqual(nativeAction({task:'ParadoxCopilot',filename:'ignored'},true),{type:'maa',task:'ParadoxCopilot'});
+});
+
+test('教学关使用拖卡时的镜头定位，拒绝地图外或不可部署的位置', async () => {
+  assert.deepEqual(await deploymentTarget('TR-S-1',[2,2],1600,900),{x:726,y:346});
+  assert.deepEqual(await deploymentTarget('TR-S-1',[4,3],1600,900),{x:968,y:424});
+  await assert.rejects(deploymentTarget('TR-S-1',[0,0],1600,900),/不可部署/);
+  await assert.rejects(deploymentTarget('TR-S-1',[2,2],800,800),/16:9/);
 });
 
 test('用关卡索引查询作业摘要，按同一 BV 过滤，再获取完整动作', async t => {
@@ -76,6 +93,34 @@ test('原生任务支持免模型执行，遵守只读模式及服务端独占',
   assert.equal(events.at(-1).outcome,'finish'); assert.equal(events.some(e=>e.type==='core'),true);
   assert.deepEqual(calls[0].a,{type:'maa',task:'Copilot'});
   assert.deepEqual(calls[0].options.guide,plan);
+});
+
+test('同一指令依次打不同悖论，同一关重复时停止', async () => {
+  const guidance = {plan:{stage:'mem_svrash_1'}};
+  const run = {type:'maa',task:'ParadoxCopilot'};
+  const actions = [run,{type:'load_guide',id:'21247'},run,run];
+  const stages = [];
+  await assert.rejects(runAgent({
+    config:{vision:false},device:{capture:async()=>({})},instruction:'完成两个悖论',history:[],
+    readOnly:false,limit:5,signal:getSignal(),emit:()=>{},observe:async f=>f,
+    plan:async()=>reply(actions.shift()),guidance,pause:async()=>{},
+    lookupGuide:async()=>{ guidance.plan = {stage:'mem_meltha_1'}; return guidance.plan; },
+    runNative:async()=>{stages.push(guidance.plan.stage);},
+  }), /重复执行/);
+  assert.deepEqual(stages,['mem_svrash_1','mem_meltha_1']);
+});
+
+test('Maa 中断后重新观察实机且不再次开战', async () => {
+  let attempts = 0, observations = 0;
+  const events = [], actions = [{type:'maa',task:'Copilot'},{type:'finish'}];
+  await runAgent({config:{vision:false},device:{capture:async()=>({})},instruction:'完成本关',history:[],
+    readOnly:false,limit:2,signal:getSignal(),emit:e=>events.push(e),pause:async()=>{},
+    observe:async f=>{observations++;return f;},guidance:{plan:{stage:'tr_s_1'}},
+    plan:async()=>reply(actions.shift()),runNative:async()=>{attempts++;throw new Error('task chain incomplete');}});
+  assert.equal(attempts,1);
+  assert.equal(observations,2);
+  assert.ok(events.some(e=>e.text?.includes('Maa 未确认完成')));
+  assert.ok(!events.some(e=>e.type==='applied'));
 });
 
 test('视频笔记只提交带时间的内联帧，拒绝远程图片替换', async t => {

@@ -5,6 +5,7 @@ import { PNG } from 'pngjs';
 import { createServer } from '../server.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { stillMatches } from '../lib/vision.mjs';
+import { runAgent } from '../lib/agent.mjs';
 
 function makeFrame(red, blue) {
   const image = new PNG({ width: 320, height: 180 });
@@ -78,6 +79,28 @@ test('仅目标区域变化时也丢弃过期点击', () => {
   const after = { ...frame, png: PNG.sync.write(changed) };
   assert.equal(stillMatches({ ...frame, image }, after, {type:'tap',x:50,y:50}), false);
   assert.equal(stillMatches({ ...frame, image }, after, {type:'tap',x:200,y:100}), true);
+});
+
+test('拖卡到作业格后只在新出现朝向框时确认方向', async () => {
+  const battle = {...makeFrame(0,0),anchors:[{label:'剩余可放置角色：4'}]};
+  const selected = PNG.sync.read(battle.png);
+  for (let y=40; y<55; y++) for (let x=100; x<119; x++) {
+    const i=(y*selected.width+x)*4;
+    selected.data[i]=230;
+    if (x>=110 && x<114) {selected.data[i+1]=235;selected.data[i+2]=235;}
+  }
+  const guidance = {plan:{stage:'tr_s_1',firstActions:[{type:'Deploy',name:'克洛丝',location:[2,2],direction:'Right'}]}};
+  for (const visible of [false,true]) {
+    const inputs=[];
+    const state = () => visible && inputs.length ? {...battle,png:PNG.sync.write(selected)} : battle;
+    await runAgent({config:{vision:true},device:{capture:async()=>state(),input:async a=>{inputs.push(a);}},
+      instruction:'按已选作业部署克洛丝，禁止使用源石',history:[],readOnly:false,limit:2,
+      signal:AbortSignal.timeout(3000),emit:()=>{},guidance,pause:async()=>{},observe:async frame=>frame,
+      plan:async()=>({intent:'operate',goal:'部署',note:'核对卡片',action:inputs.length?{type:'finish'}:{type:'deploy',step:1,x:900,y:915}})});
+    assert.equal(inputs.length,visible ? 2 : 1);
+    assert.deepEqual([inputs[0].x2,inputs[0].y2],[145,69]);
+    if (visible) assert.ok(inputs[1].x2>inputs[1].x && inputs[1].y2===inputs[1].y);
+  }
 });
 
 test('等待模型时独占设备，浏览器断开后释放任务', { timeout: 12000 }, async t => {

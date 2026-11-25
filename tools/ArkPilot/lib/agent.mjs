@@ -1,5 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { recognize, stillMatches } from './vision.mjs';
+import { hasFacingPrompt, recognize, stillMatches } from './vision.mjs';
+import { deploymentTarget } from './guides.mjs';
 import { decide } from './model.mjs';
 import { nativeAction } from './maa.mjs';
 
@@ -83,6 +84,11 @@ export function validateDecision(reply, frame, readOnly, vision, maaAvailable = 
       action = { type: 'swipe', x: px(a.x, frame.width), y: px(a.y, frame.height),
         x2: px(a.x2, frame.width), y2: px(a.y2, frame.height), ms: integer(a.ms, 100, 2000) };
       break;
+    case 'deploy':
+      if (!vision || !hasPlan) throw new InvalidInput('部署需要截图和已附的本关作业。');
+      action = {type:'deploy',step:integer(a.step,1,24),x:px(a.x,frame.width),y:px(a.y,frame.height)};
+      if (action.y < frame.height * 0.78) throw new InvalidInput('请从战斗底部实际出现的待部署卡拖动。');
+      break;
     case 'back': action = { type: 'back' }; break;
     case 'wait': action = { type: 'wait', ms: integer(a.ms, 300, 30000) }; break;
     default: throw new Error('模型返回了不支持的动作。');
@@ -90,11 +96,31 @@ export function validateDecision(reply, frame, readOnly, vision, maaAvailable = 
   return { ...decision, action };
 }
 
+async function deployFromGuide(action, guide, frame, device, signal, pause) {
+  const order = guide.firstActions?.[action.step - 1];
+  const onBattlefield = frame.anchors.some(anchor => /剩余可放置|可放置角色|UnitLimit/i.test(anchor.label.replace(/\s/g,'')));
+  if (!order || !['Deploy','部署'].includes(order.type ?? 'Deploy') || !onBattlefield) {
+    throw new Error('当前没有确认战斗部署栏或对应的部署步骤。');
+  }
+  const target = await deploymentTarget(guide.stage,order.location,frame.width,frame.height);
+  await device.input({type:'swipe',x:action.x,y:action.y,x2:target.x,y2:target.y,ms:450},signal);
+  if (['None','无'].includes(order.direction)) return true;
+
+  await pause(280,signal);
+  if (!hasFacingPrompt(frame,await device.capture(signal),target)) return false;
+  const vectors = {Right:[1,0],右:[1,0],Left:[-1,0],左:[-1,0],Up:[0,-1],上:[0,-1],Down:[0,1],下:[0,1]};
+  const [dx,dy] = vectors[order.direction];
+  const distance = Math.round(frame.height * 0.18);
+  await device.input({type:'swipe',...target,x2:Math.max(0,Math.min(frame.width-1,target.x+dx*distance)),
+    y2:Math.max(0,Math.min(frame.height-1,target.y+dy*distance)),ms:260},signal);
+  return true;
+}
+
 export async function runAgent({ config, device, instruction, history, readOnly, limit, signal, emit,
   runNative, guidance, lookupGuide,
   observe = recognize, plan = decide, matches = stillMatches, pause = (ms, s) => delay(ms, undefined, { signal: s }) }) {
   const steps = [];
-  const completedTasks = new Set();
+  const attemptedTasks = new Set();
   const protectsCurrency = noPremiumSpend.test(instruction);
   const requestedAdaptation = wantsAdaptedPlan(instruction);
   let adaptation, rejectedInput;
@@ -137,7 +163,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       else if (!adaptation.ready) decision = {...decision,note:adaptation.reason || adaptation.error || '未生成适配作业。',action:{type:'ask'}};
     }
     const { action, note, goal } = decision;
-    if (protectsCurrency && ['tap','swipe','maa'].includes(action.type) && premiumConfirmation(frame)) {
+    if (protectsCurrency && ['tap','swipe','deploy','maa'].includes(action.type) && premiumConfirmation(frame)) {
       emit({type:'end', outcome:'stop', goal, count:actionCount,
         note:'识别到源石恢复或货币消费确认界面，已按本轮禁用货币的要求停止输入。'});
       return;
@@ -160,10 +186,21 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       continue;
     }
     if (action.type === 'maa') {
-      const key = JSON.stringify(action);
-      if (completedTasks.has(key)) throw new Error('本条指令已执行过该 Maa 任务，已停止重复执行。');
-      await runNative(action);
-      completedTasks.add(key);
+      const key = ['Copilot','ParadoxCopilot'].includes(action.task)
+        ? JSON.stringify(['guide', guidance.plan.stage]) : JSON.stringify(action);
+      if (attemptedTasks.has(key)) throw new Error('本条指令已尝试该 Maa 任务，已停止重复执行。');
+      attemptedTasks.add(key);
+      try {
+        await runNative(action);
+      } catch (error) {
+        signal.throwIfAborted();
+        if (error.beforeStart) attemptedTasks.delete(key);
+        const reason = (error.beforeStart ? 'Maa 尚未开战。' : 'Maa 未确认完成。') + error.message;
+        steps.push({turn,action,note,result:reason});
+        emit({type:'research_error',text:reason,turn});
+        actionCount++;
+        continue;
+      }
     } else if (action.type === 'wait') {
       await pause(action.ms, signal);
     } else {
@@ -180,7 +217,16 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       identicalInputs = previousInput?.signature === signature && frame.png.equals(previousInput.png) ? identicalInputs + 1 : 0;
       if (identicalInputs >= 2) throw new Error('连续两次相同输入后画面仍未变化，已停止重复操作。');
       signal.throwIfAborted();
-      await device.input(action, signal);
+      if (action.type === 'deploy') {
+        if (!await deployFromGuide(action,guidance.plan,frame,device,signal,pause)) {
+          steps.push({turn,action,note,result:'已拖卡，未确认朝向框，请观察新画面再操作。'});
+          emit({type:'stale',text:'已拖卡，等待核对朝向框。',turn});
+          actionCount++;
+          continue;
+        }
+      } else {
+        await device.input(action, signal);
+      }
       previousInput = { signature, png: frame.png };
     }
     actionCount++;

@@ -166,6 +166,7 @@ function actionName(a) {
     case 'adapt_guide': return '按名册适配部署';
     case 'tap': return '点击 (' + a.x + ', ' + a.y + ')';
     case 'swipe': return '滑动 (' + a.x + ', ' + a.y + ') → (' + a.x2 + ', ' + a.y2 + ')';
+    case 'deploy': return '部署作业第 ' + a.step + ' 步的干员';
     case 'back': return '返回';
     case 'wait': return '等待 ' + a.ms / 1000 + ' 秒';
   }
