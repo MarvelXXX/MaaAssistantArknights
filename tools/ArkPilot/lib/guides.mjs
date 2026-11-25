@@ -34,7 +34,7 @@ export function checkPlan(plan) {
 }
 
 let overview;
-async function stageAliases(query) {
+export async function stageAliases(query) {
   const text = String(query || '').trim();
   if (!text || text.length > 100) throw new Error('请输入关卡编号或名称。');
   overview ??= readFile(path.join(resource, 'Arknights-Tile-Pos', 'overview.json'), 'utf8')

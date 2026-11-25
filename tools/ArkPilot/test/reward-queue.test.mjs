@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {nextRewardGuide, reconcileReward, rewardEvidence, runRewardStage, selectRewardTarget, verifyWalletAccount} from '../lib/reward-queue.mjs';
+import {nextRewardGuide, reconcileReward, rewardEvidence, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
 import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
 
 test('摆完挂机后仅对持续敞开的同一名干员面板交回控制', () => {
@@ -18,6 +18,25 @@ test('摆完挂机后仅对持续敞开的同一名干员面板交回控制', ()
   assert.equal(watch('SkillDaemon',frame('红'),60000),false);
   assert.equal(watch('SkillDaemon',{width:1600,anchors:[]},66000),false);
   assert.equal(watch('SkillDaemon',frame('红'),70000),false);
+});
+
+test('教学结算过渡中断后仅凭同关三星、首次掉落及两种货币的准确差额入账', async () => {
+  const target={stage:'act27side_tr02',label:'火山旅梦 SL-TR-2 普通 跟着我拍拍手',currency:'prime',amount:1};
+  const before={prime:136,orundum:17978}, after={prime:137,orundum:17978};
+  const anchors=['SL-TR-2','跟着我拍拍手','首次掉落'].map(label=>({label,source:'OCR'}));
+  anchors.push({label:'结算三星标志',source:'Maa'});
+  assert.equal(await verifiedFirstDrop(target,before,after,anchors),true);
+  for (const missing of anchors) {
+    assert.equal(await verifiedFirstDrop(target,before,after,anchors.filter(a=>a!==missing)),false);
+  }
+  assert.equal(await verifiedFirstDrop({...target,stage:'act27side_tr01'},before,after,anchors),false);
+  assert.equal(await verifiedFirstDrop({...target,label:'火山旅梦 SL-TR-2 突袭 跟着我拍拍手'},before,after,anchors),false);
+  assert.equal(await verifiedFirstDrop(target,before,{...after,prime:138},anchors),false);
+  assert.equal(await verifiedFirstDrop(target,before,{...after,orundum:17778},anchors),false);
+  const evidence=rewardEvidence(target.stage);
+  evidence.observe({type:'frame',preview:'early',anchors:[{label:'行动结束'}]});
+  evidence.observe({type:'frame',preview:'complete',anchors});
+  assert.equal(evidence.best.preview,'complete');
 });
 
 test('悖论凭证优先保留无遮挡结算，OCR漏读时仅保存战后关卡页', () => {

@@ -2,9 +2,10 @@ import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import jpeg from 'jpeg-js';
+import { PNG } from 'pngjs';
 import { decide } from './model.mjs';
 import { recognize } from './vision.mjs';
-import { checkPlan, importGuide, matchesRewardStage } from './guides.mjs';
+import { checkPlan, importGuide, matchesRewardStage, stageAliases } from './guides.mjs';
 
 const minute = 60000;
 const closed = new Set(['首通已核', '领取已核', '原已完成']);
@@ -75,6 +76,18 @@ export function reconcileReward(target, report, before, after) {
   if (report.startsWith('结晶不足')) return '结晶不足';
   if (report.startsWith('入口关闭')) return '入口关闭';
   return '未完成';
+}
+
+export async function verifiedFirstDrop(target, before, after, anchors) {
+  if (!target.stage || target.claimAvailable || target.currency !== 'prime' || target.amount !== 1 ||
+      !before || !after || !Number.isInteger(before.prime) || !Number.isInteger(before.orundum) ||
+      after.prime !== before.prime+1 || after.orundum !== before.orundum) return false;
+  const {row} = await stageAliases(target.stage);
+  if (!row?.code || !row.name || row.stageId !== target.stage || !target.label.includes(row.code+' 普通 ')) return false;
+  const norm = text => text.replace(/\s/g,'').toUpperCase();
+  const words = new Set(anchors.filter(a=>a.source==='OCR').map(a=>norm(a.label)));
+  return words.has(norm(row.code)) && words.has(norm(row.name)) && words.has('首次掉落') &&
+    anchors.some(a=>a.source==='Maa' && a.label==='结算三星标志');
 }
 
 function balanceDetail(image) {
@@ -169,10 +182,11 @@ export function rewardEvidence(stage) {
       // The home navigation overlay leaves the stage and its reward text visible underneath.
       if (text.includes('公开招募') && /采购中心|干员寻访|档案/.test(text)) return;
       let score;
-      if (/获得物资|结算三星标志|结算二星标志|磨难结算标志|行动结束/.test(text)) score = 3;
+      if (text.includes('结算三星标志') && text.includes('首次掉落')) score = 4;
+      else if (/获得物资|结算三星标志|结算二星标志|磨难结算标志|行动结束/.test(text)) score = 3;
       else if (text.includes('已完成模拟作战')) score = 2;
       else if (battleSeen && stage?.startsWith('mem_') && /悖论模拟开始按钮|开始模拟/.test(text)) score = 1;
-      if (score && (!best || score > best.score)) best = {score,kind:score === 1 ? 'stage' : 'result',preview:event.preview};
+      if (score && (!best || score > best.score)) best = {score,kind:score === 1 ? 'stage' : 'result',preview:event.preview,anchors:event.anchors};
     },
     get best() { return best; },
   };
@@ -222,11 +236,11 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await rename(report+'.tmp',report);
   };
   const notify = text => { emit({type:'checkpoint',text}); emit({type:'core',text}); };
-  const play = async (instruction, {limit, onStageEvent, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative = true, fixedTeam = false}) => {
+  const play = async (instruction, {limit, onStageEvent, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative = true, fixedTeam = false}, observe = onStageEvent) => {
     let result;
     const options={instruction, limit, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
       if (e.type === 'end') { result = e; return; }
-      onStageEvent?.(e);
+      observe?.(e);
       emit(e);
     }};
     if (onStageEvent) await runRewardStage(runCommand,options);
@@ -234,13 +248,13 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     if (!onStageEvent && result?.outcome==='ask') throw new Error(result.note || '游戏需要手动完成原账号登录。');
     return result?.note?.trim() || '未完成';
   };
-  const homeWallet = async () => {
+  const homeWallet = async observe => {
     const read = ()=>verifyWalletAccount(()=>captureWallet(device,config,signal),manifest.uid);
     try { return await read(); }
     catch (error) {
       signal.throwIfAborted();
       if (error.message.includes('UID')) throw error;
-      await play('回到当前游戏账号的首页，若有结算请先观察再退出，有未结束的实战等到结算。认证失效可确认后使用设备记住的原账号快捷登录。若要求短信、扫码、密码或提示其他设备在线，停在该页并 ask。停在首页，不领取其他奖励。'+spendRule,{limit:30,allowNative:false});
+      await play('回到当前游戏账号的首页，若有结算请先观察再退出，有未结束的实战等到结算。认证失效可确认后使用设备记住的原账号快捷登录。若要求短信、扫码、密码或提示其他设备在线，停在该页并 ask。停在首页，不领取其他奖励。'+spendRule,{limit:30,allowNative:false},observe);
       return read();
     }
   };
@@ -249,6 +263,31 @@ export async function runRewardQueue({filename, serial, device, config, runComma
   const imageFile = (id, type, preview) => writeFile(path.join(dir,id+'-'+type+'.jpg'),Buffer.from(preview.split(',')[1],'base64'));
   await imageFile('session','home',wallet.image);
   notify('已核对首页，至纯源石 '+wallet.prime+'，合成玉 '+wallet.orundum+'。');
+  const proofNote = '首通已核：本关结算截图的关号、关名、三星与首次掉落标记吻合，同一轮首页源石增加 1，合成玉持平。';
+  for (const target of manifest.targets) {
+    const row = ledger.items[target.id];
+    if (row?.status !== '余额待复核' || target.currency !== 'prime' || !target.stage) continue;
+    const proof = path.join(dir,target.id+'-result.jpg');
+    try {
+      const {mtimeMs} = await stat(proof);
+      const end = Date.parse(row.at);
+      const start = row.started ? Date.parse(row.started) : Math.max(end-35*minute,
+        ...Object.values(ledger.items).map(r=>Date.parse(r.at)).filter(at=>at<end));
+      if (!(mtimeMs>=start && mtimeMs<=end+1000)) continue;
+      const image = jpeg.decode(await readFile(proof),{useTArray:true});
+      const client = await device.checkGame(signal);
+      const {anchors} = await recognize({png:PNG.sync.write(image),width:image.width,height:image.height,client},signal);
+      if (!await verifiedFirstDrop(target,row.before,row.after,anchors)) continue;
+    } catch {
+      signal.throwIfAborted();
+      continue;
+    }
+    Object.assign(row,{status:'首通已核',note:proofNote,evidence:'result'});
+    delete row.review;
+    ledger.opened[target.chapter] = true;
+    await save();
+    notify(target.label+' · 已从该轮结算截图和首页账目复核首通。');
+  }
   while (!signal.aborted) {
     const changed = (await stat(filename)).mtimeMs;
     if (changed !== modified) {
@@ -318,13 +357,17 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       report='未完成 '+error.message;
     }
     restoredTarget=undefined;
-    wallet = await homeWallet();
+    wallet = await homeWallet(evidence.observe);
     // An interrupted successful battle may already have been credited on this run's first frame.
     if (previous.status === '进行中' && report.startsWith('原已完成') &&
         wallet[t.currency]-before[t.currency] === t.amount) report = '首通已核（中断后复核） '+report;
-    const status = reconcileReward(t,report,before,wallet);
+    let status = reconcileReward(t,report,before,wallet);
+    if (status==='余额待复核' && evidence.best && await verifiedFirstDrop(t,before,wallet,evidence.best.anchors)) {
+      report = proofNote;
+      status = '首通已核';
+    }
     await imageFile(t.id,'home',wallet.image);
-    const row = ledger.items[t.id] = {status,attempts,before,after:numbers(wallet),note:report,at:new Date().toISOString()};
+    const row = ledger.items[t.id] = {status,attempts,before,after:numbers(wallet),started:ledger.items[t.id].started,note:report,at:new Date().toISOString()};
     if (evidence.best) {
       await imageFile(t.id,evidence.best.kind,evidence.best.preview);
       row.evidence = evidence.best.kind;
