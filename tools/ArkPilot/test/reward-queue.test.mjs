@@ -103,6 +103,11 @@ test('更正作业后可提前重试一次，余额待核和已完成均不能�
   row.revision=2;
   assert.equal(selectRewardTarget([t],ledger,10),undefined);
   t.revision=3;
+  row.status='入口关闭';
+  assert.equal(selectRewardTarget([t],ledger,10),t);
+  row.revision=3;
+  assert.equal(selectRewardTarget([t],ledger,10),undefined);
+  t.revision=4;
   for (const status of ['余额待复核','余额下降','首通已核','原已完成']) {
     row.status=status;
     assert.equal(selectRewardTarget([t],ledger,10),undefined);
