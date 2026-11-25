@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from '../server.mjs';
 import { biliInfo, checkPlan, deploymentTarget, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from '../lib/guides.mjs';
-import { copilotDefeatReport, nativeAction, recognizedDefeat } from '../lib/maa.mjs';
+import { copilotDefeatReport, nativeAction, paradoxNavigationPlan, recognizedDefeat } from '../lib/maa.mjs';
 import { normalizeRoster, rosterFit } from '../lib/roster.mjs';
 import { runAgent, validateDecision } from '../lib/agent.mjs';
 import { explainFrames } from '../lib/model.mjs';
@@ -58,6 +58,21 @@ test('按分 P 标题匹配完整关号，保留显式选段并提示同关的�
   await assert.rejects(lookup(undefined,'AS-MO-1'),/P3.+P4/);
   assert.equal((await lookup(4,'AS-MO-1')).page.cid,4);
   await assert.rejects(lookup(undefined,'SL-7'),/P1 AS-S-1/);
+});
+
+test('悖论列表导航使用空编队作业注明的手选技能', async () => {
+  const stage = 'mem_demkni_1';
+  const guide = {...plan,stage_name:stage,opers:[],doc:{details:'进入选技能界面，手选3技能进入关卡'}};
+  const prepared = await paradoxNavigationPlan(guide,stage);
+  assert.deepEqual(prepared.opers,[{name:'塞雷娅',skill:3}]);
+  assert.deepEqual(guide.opers,[]);
+  assert.equal(prepared.actions,guide.actions);
+  assert.equal(await paradoxNavigationPlan(prepared,stage),prepared);
+  const defaults = {...guide,doc:{details:'开局部署塞雷娅'}};
+  assert.equal(await paradoxNavigationPlan(defaults,stage),defaults);
+  for (const details of ['手选二技能或三技能','手选二技能，手动选择三技能。']) {
+    await assert.rejects(paradoxNavigationPlan({...guide,doc:{details}},stage),{beforeStart:true});
+  }
 });
 
 test('作业必须包含有效的部署与编队，模型无权传入原生任务参数', () => {

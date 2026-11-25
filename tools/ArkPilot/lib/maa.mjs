@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { parseEnv, promisify } from 'node:util';
 import { adbPath } from './device.mjs';
 import { checkPlan, paradoxStageId } from './guides.mjs';
+import { characters } from './roster.mjs';
 
 const worker = fileURLToPath(new URL('./maa-worker.ps1', import.meta.url));
 const execute = promisify(execFile);
@@ -214,6 +215,26 @@ export async function scanRoster({home, device, serial, signal}) {
   });
 }
 
+export async function paradoxNavigationPlan(plan, stage) {
+  const details = plan.doc?.details || '';
+  if (plan.opers?.length || plan.groups?.length) return plan;
+  const instructions = details.split(/(?:^|[，,。；;：:\n])\s*(?:请\s*)?(?:手选|手动选择?)/).slice(1);
+  if (!instructions.length) return plan;
+
+  // List navigation defaults to skill one when the published plan omits its operator.
+  const skills = new Set();
+  const manualSelection = () => Object.assign(new Error('该悖论作业需要手选技能。请在游戏内核对并选好技能，再从本关准备界面执行 Copilot。'),{beforeStart:true});
+  for (const part of instructions) {
+    const slot = part.match(/^\s*(?:第\s*)?([123一二三])\s*技能(?=\s*(?:进入|进图|开战|开始|[，,。；;！!\n]|$))/)?.[1];
+    if (!slot) throw manualSelection();
+    skills.add(Number(slot) || '一二三'.indexOf(slot)+1);
+  }
+  const id = /^mem_(.+)_\d+$/.exec(stage)?.[1];
+  const matches = id ? (await characters()).characters.filter(op=>op.id.endsWith('_'+id)) : [];
+  if (skills.size!==1 || matches.length!==1) throw manualSelection();
+  return {...plan,opers:[{name:matches[0].name,skill:[...skills][0]}]};
+}
+
 export async function executeMaa(action, { home, device, serial, guide, formation, signal, progress, prepare = false, afterStep }) {
   const a = nativeAction(action, !!guide);
   return workspace(async work => {
@@ -223,9 +244,10 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
     if (a.task === 'Award') params = {award:true, mail:false, recruit:false, orundum:false, mining:false, specialaccess:false};
     if (a.task === 'Copilot' || a.task === 'ParadoxCopilot') {
       const filename = path.join(work, 'plan.json');
-      const plan = checkPlan(guide);
-      const stage = await paradoxStageId(plan);
+      const original = checkPlan(guide);
+      const stage = await paradoxStageId(original);
       if (a.task === 'ParadoxCopilot' && !stage) throw new Error('从干员列表启动悖论模拟需要对应的悖论作业。');
+      const plan = a.task==='ParadoxCopilot' ? await paradoxNavigationPlan(original,stage) : original;
       await writeFile(filename, JSON.stringify(stage ? {...plan,stage_name:stage} : plan), 'utf8');
       if (afterStep != null) {
         if (a.task!=='Copilot' || !Number.isInteger(afterStep) || afterStep<1 || afterStep>=plan.actions.length) {
