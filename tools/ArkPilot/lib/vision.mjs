@@ -15,6 +15,7 @@ const labels = {
   'StageDrops-Stars-3': '结算三星标志', 'StageDrops-Stars-2': '结算二星标志',
   'StageDrops-Stars-Adverse': '磨难结算标志', UseStone: '源石恢复提示',
   UseMedicine: '理智药恢复提示',
+  BattleCostFlag: '战斗部署费用图标', BattleHpFlag: '战斗防御点图标', BattleHpFlag2: '战斗防御点图标',
 };
 const languages = {
   'com.YoStarEN.Arknights': 'en-US', 'com.YoStarJP.Arknights': 'ja-JP',

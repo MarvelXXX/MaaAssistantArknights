@@ -131,3 +131,21 @@ test('等待模型时独占设备，浏览器断开后释放任务', { timeout: 
   assert.equal((await (await fetch(app + '/api/health')).json()).active, false);
   assert.equal(inputs.length, 0);
 });
+
+test('部署栏漏识别后仍在同一局，用击杀数和费用图标重新确认拖卡', async () => {
+  const shot=makeFrame(0,0);
+  const inputs=[], events=[];
+  let observations=0;
+  const deploy={type:'deploy',step:1,x:900,y:920};
+  await runAgent({config:{vision:true},device:{capture:async()=>shot,input:async a=>inputs.push(a)},
+    instruction:'继续本局，部署克洛丝',history:[],readOnly:false,limit:3,signal:AbortSignal.timeout(3000),
+    guidance:{plan:{stage:'tr_s_1',firstActions:[{type:'Deploy',name:'克洛丝',location:[2,2],direction:'None'}]}},
+    emit:e=>events.push(e),matches:()=>true,pause:async()=>{},
+    observe:async frame=>({...frame,anchors:++observations===1 ? [] : [
+      {label:'3 / 9',source:'OCR',box:[142,4,21,9]}, {label:'战斗部署费用图标',source:'Maa'}]}),
+    plan:async()=>({intent:'operate',goal:'继续教学',note:'核对战场',action:inputs.length?{type:'finish'}:deploy})});
+  assert.equal(inputs.length,1);
+  assert.equal(inputs[0].type,'swipe');
+  assert.ok(events.some(e=>e.type==='stale' && e.text.includes('未拖卡')));
+  assert.equal(events.at(-1).outcome,'finish');
+});

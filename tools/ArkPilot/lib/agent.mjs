@@ -96,12 +96,20 @@ export function validateDecision(reply, frame, readOnly, vision, maaAvailable = 
   return { ...decision, action };
 }
 
+function hasBattlefieldHud(frame) {
+  const anchors = frame.anchors;
+  if (anchors.some(a=>/剩余可放置|可放置角色|UnitLimit/i.test(a.label.replace(/\s/g,'')))) return true;
+  const native = new Set(anchors.filter(a=>a.source==='Maa').map(a=>a.label));
+  const kills = anchors.some(a=>a.box && a.box[1]<frame.height*0.1 &&
+    a.box[0]>frame.width*0.28 && a.box[0]<frame.width*0.6 && /^\d{1,3}[/／]\d{1,3}$/.test(a.label.replace(/\s/g,'')));
+  return native.has('战斗部署费用图标') && (kills || native.has('战斗防御点图标')) ||
+    native.has('战斗防御点图标') && kills;
+}
+
 async function deployFromGuide(action, guide, frame, device, signal, pause) {
   const order = guide.firstActions?.[action.step - 1];
-  const onBattlefield = frame.anchors.some(anchor => /剩余可放置|可放置角色|UnitLimit/i.test(anchor.label.replace(/\s/g,'')));
-  if (!order || !['Deploy','部署'].includes(order.type ?? 'Deploy') || !onBattlefield) {
-    throw new Error('当前没有确认战斗部署栏或对应的部署步骤。');
-  }
+  if (!order || !['Deploy','部署'].includes(order.type ?? 'Deploy')) throw new InvalidInput('附件中这一步不是部署，请核对作业步骤。');
+  if (!hasBattlefieldHud(frame)) throw new InvalidInput('本帧未确认战斗部署栏，未拖卡。请观察新画面和高亮提示。');
   const target = await deploymentTarget(guide.stage,order.location,frame.width,frame.height);
   await device.input({type:'swipe',x:action.x,y:action.y,x2:target.x,y2:target.y,ms:450},signal);
   if (['None','无'].includes(order.direction)) return true;
@@ -217,7 +225,16 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       if (identicalInputs >= 2) throw new Error('连续两次相同输入后画面仍未变化，已停止重复操作。');
       signal.throwIfAborted();
       if (action.type === 'deploy') {
-        if (!await deployFromGuide(action,guidance.plan,frame,device,signal,pause)) {
+        let placed;
+        try { placed = await deployFromGuide(action,guidance.plan,frame,device,signal,pause); }
+        catch (error) {
+          if (!(error instanceof InvalidInput)) throw error;
+          steps.push({turn,action,note,result:error.message});
+          emit({type:'stale',text:error.message,turn});
+          actionCount++;
+          continue;
+        }
+        if (!placed) {
           steps.push({turn,action,note,result:'已拖卡，未确认朝向框，请观察新画面再操作。'});
           emit({type:'stale',text:'已拖卡，等待核对朝向框。',turn});
           actionCount++;
