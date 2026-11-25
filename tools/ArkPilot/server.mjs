@@ -188,7 +188,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         const home = await getHome();
         if (config) config.model = await chooseModel(config, signal);
         const emit = eventStream(res);
-        async function runCommand({instruction, signal, emit, history = [], guide = null, limit, expectedStage, allowNative = true, fixedTeam = false}) {
+        async function runCommand({instruction, signal, emit, history = [], guide = null, guideId, onGuideStart, limit, expectedStage, allowNative = true, fixedTeam = false}) {
           let adaptationBlocked = false;
           let formation = !fixedTeam && data.formation === true;
           const runNative = async a => {
@@ -213,6 +213,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             };
             timer = setTimeout(updateFrame, 1500);
             try {
+              if (guideId) onGuideStart?.(guideId);
               return await native(a, {home,device,serial:data.serial,guide,formation,signal,progress:text=>emit({type:'core',text})});
             } finally {
               observer.abort();
@@ -270,7 +271,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
               const result = await adaptGuide(guide,roster,guidance.notes,
                 m=>proposeTeam(config,{...m,instruction,recentRequests,wiki:excerpts.slice(-3),videos:videoNotes.slice(-2)},signal));
               if (!result.ready) return {ready:false,reason:result.reason,assessment:result.assessment};
-              guide = result.plan; adaptationBlocked = false; formation = true; guidance.plan = briefPlan(guide);
+              guide = result.plan; adaptationBlocked = false; formation = !fixedTeam; guidance.plan = briefPlan(guide);
               guidance.notes = (result.reason+'\n'+guidance.notes).slice(0,6000);
               emit({type:'guide_loaded',...result,notes:guidance.notes});
               return {ready:true,reason:result.reason,changes:result.changes,plan:guidance.plan};
@@ -284,6 +285,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             if (!candidates.has(a.id)) throw new Error('请先搜索关卡，或在指令里给出具体作业号。');
             const material = await importGuide(a.id,signal);
             guide = material.plan;
+            guideId = a.id;
             adaptationBlocked = false;
             guidance.notes = (material.notes || guide.doc?.details || '').slice(0,6000);
             formation = !fixedTeam && data.formation === true;

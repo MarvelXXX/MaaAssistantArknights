@@ -19,10 +19,28 @@ function validateManifest(manifest, serial) {
     if (!/^[a-zA-Z0-9_#@.-]{1,100}$/.test(t.id) || ids.has(t.id) || !t.label || !t.route ||
         !Number.isInteger(t.amount) || t.amount < 1 || !['prime','orundum'].includes(t.currency) ||
         !Array.isArray(t.requires) || (t.guideId && !/^[1-9]\d{0,9}$/.test(t.guideId))) throw new Error('首通清单包含无效或重复的目标。');
+    if (t.retryGuideIds != null && (!Array.isArray(t.retryGuideIds) || t.retryGuideIds.length>20 ||
+        t.retryGuideIds.some(id=>typeof id!=='string' || !/^[1-9]\d{0,9}$/.test(id)))) throw new Error('备选作业号无效。');
     if (t.plan) checkPlan(t.plan);
     ids.add(t.id);
   }
   if (manifest.targets.some(t => t.requires.some(id => !ids.has(id) || id === t.id))) throw new Error('清单含未知前置关卡。');
+}
+
+function failedGuides(row) {
+  const ids = new Set(row?.failedGuideIds || []);
+  const legacy = row?.note?.match(/失败作业号[：:]\s*([1-9]\d{0,9})(?!\d)/);
+  if (legacy) ids.add(legacy[1]);
+  return ids;
+}
+
+export function nextRewardGuide(target, row) {
+  if (target.plan) return;
+  if (!row?.note) return target.guideId;
+  if (!target.retryGuideIds?.length) return;
+  const failed = failedGuides(row);
+  if (row.review) for (const id of row.offeredGuideIds || []) failed.add(id);
+  return [target.guideId,...target.retryGuideIds].find(id=>id && !failed.has(id));
 }
 
 export function selectRewardTarget(targets, ledger, now) {
@@ -30,7 +48,8 @@ export function selectRewardTarget(targets, ledger, now) {
   if (interrupted) return interrupted;
   return targets.find(t => {
     const row = ledger.items[t.id];
-    return !closed.has(row?.status) && !row?.review && !(row?.nextAt > now) &&
+    const revised = row?.status === '未完成' && row.review && nextRewardGuide(t,row);
+    return !closed.has(row?.status) && (!row?.review || revised) && !(row?.nextAt > now) &&
       !(t.ap > 0 && ledger.sanityWait > now) && !(t.crystal && ledger.crystalWait > now && !ledger.opened[t.chapter]) &&
       t.requires.every(id => closed.has(ledger.items[id]?.status));
   });
@@ -137,9 +156,9 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await rename(report+'.tmp',report);
   };
   const notify = text => { emit({type:'checkpoint',text}); emit({type:'core',text}); };
-  const play = async (instruction, {limit, onFrame, expectedStage, guide, allowNative = true, fixedTeam = false}) => {
+  const play = async (instruction, {limit, onFrame, expectedStage, guide, guideId, onGuideStart, allowNative = true, fixedTeam = false}) => {
     let result;
-    await runCommand({instruction, limit, expectedStage, guide, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
+    await runCommand({instruction, limit, expectedStage, guide, guideId, onGuideStart, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
       if (e.type === 'end') { result = e; return; }
       if (e.type === 'frame') onFrame?.(e);
       emit(e);
@@ -188,23 +207,29 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     ledger.items[t.id] = {...previous, status:'进行中', attempts, before, started:new Date().toISOString()};
     await save();
     notify(t.label+'，第 '+attempts+' 次核查。');
-    let report, evidence;
+    let report, evidence, usedGuide;
+    const offered = new Set(previous.offeredGuideIds || []);
+    const failed = failedGuides(previous);
     const credited = previous.status==='进行中' && wallet[t.currency]-before[t.currency]===t.amount;
     const caution = credited ? '上次中断后余额已增加对应金额。仅去本关详情核对完成标志，不得再次开战。' :
       previous.status === '进行中' ? '上轮中断，务必先核对本关已领取状态。' : '';
     const previousNote = previous.note ? '上次观察：'+previous.note.slice(0,450)+'。更换失败的作业或阵容。' : '';
+    const avoid = failed.size ? '之前未通过的作业号：'+[...failed].join('、')+'。' : '';
     try {
       let guide = t.plan;
-      if (!guide && t.guideId && !previous.note) {
-        try { guide = (await importGuide(t.guideId,signal)).plan; }
+      const candidate = nextRewardGuide(t,previous);
+      if (candidate) {
+        offered.add(candidate);
+        try { guide = (await importGuide(candidate,signal)).plan; }
         catch { signal.throwIfAborted(); }
       }
       if (guide && (!t.stage || !await matchesRewardStage(guide,t.stage))) throw new Error('预载作业与本项目标不符。');
-      if (guide) emit({type:'guide_loaded',plan:guide});
+      if (guide) emit({type:'guide_loaded',plan:guide,source:candidate ? 'PRTS #'+candidate : '本地 JSON'});
       const loaded = guide ? '本项作业已经按真实关号核对并载入，直接用当前附件，无需再次检索或导入。' : '';
-      report = await play('本轮只处理 '+t.label+'。'+t.route+'。'+caution+previousNote+loaded+
+      report = await play('本轮只处理 '+t.label+'。'+t.route+'。'+caution+previousNote+avoid+loaded+
         '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。'+spendRule,{
-          limit:75, expectedStage:t.stage, guide, allowNative:!credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
+          limit:75, expectedStage:t.stage, guide, guideId:guide ? candidate : undefined, onGuideStart:id=>{usedGuide=id;},
+          allowNative:!credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
           onFrame:e=>{
             const labels = e.anchors.map(a=>a.label).join('').replace(/\s/g,'');
             if (/已完成模拟作战|获得物资|结算三星标志|磨难结算标志|行动结束/.test(labels)) evidence=e.preview;
@@ -219,6 +244,9 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await imageFile(t.id,'home',wallet.image);
     if (evidence) await imageFile(t.id,'result',evidence);
     const row = ledger.items[t.id] = {status,attempts,before,after:numbers(wallet),note:report,at:new Date().toISOString()};
+    if (usedGuide && status==='未完成') failed.add(usedGuide);
+    if (failed.size) row.failedGuideIds = [...failed];
+    if (offered.size) row.offeredGuideIds = [...offered];
     if (closed.has(status)) ledger.opened[t.chapter] = true;
     else if (status === '理智不足') ledger.sanityWait = row.nextAt = Date.now()+Math.max(10,t.ap||10)*6*minute;
     else if (status === '结晶不足') ledger.crystalWait = row.nextAt = Date.now()+24*60*minute;

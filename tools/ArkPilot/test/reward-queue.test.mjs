@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {reconcileReward, selectRewardTarget} from '../lib/reward-queue.mjs';
+import {nextRewardGuide, reconcileReward, selectRewardTarget} from '../lib/reward-queue.mjs';
 
 test('首通须有实机结论和对应余额变化，已通关不重复记账', () => {
   const t = {amount:200,currency:'orundum'};
@@ -29,4 +29,26 @@ test('理智和结晶不足时继续独立目标，保留待复核和前置关�
 test('恢复时先核对中断项，避免把另一关的奖励记到旧账上', () => {
   const targets=[{id:'new',requires:[]},{id:'interrupted',requires:[]}];
   assert.equal(selectRewardTarget(targets,{items:{interrupted:{status:'进行中'}},opened:{}},0).id,'interrupted');
+});
+
+test('从实战记录和旧进度中跳过失败作业，保留按练度选择攻略的路线', () => {
+  const target={id:'t',requires:[],guideId:'1001',retryGuideIds:['1002','1003']};
+  const row={status:'未完成',note:'失败作业号：1002。',failedGuideIds:['1001']};
+  assert.equal(nextRewardGuide(target), '1001');
+  assert.equal(nextRewardGuide(target,row), '1003');
+  assert.equal(nextRewardGuide({...target,retryGuideIds:[]},row), undefined);
+  assert.equal(nextRewardGuide({...target,plan:{}},row), undefined);
+});
+
+test('待复核的战败只在增加可用新作业时恢复，到账异常持续保留', () => {
+  const t={id:'t',requires:[],guideId:'101',retryGuideIds:['102']};
+  const row={review:true,status:'未完成',note:'失败作业号：101',offeredGuideIds:['101','102']};
+  const ledger={items:{t:row},opened:{}};
+  assert.equal(selectRewardTarget([t],ledger,10),undefined);
+  t.retryGuideIds.push('103');
+  assert.equal(selectRewardTarget([t],ledger,10),t);
+  row.status='余额待复核';
+  assert.equal(selectRewardTarget([t],ledger,10),undefined);
+  row.status='首通已核';
+  assert.equal(selectRewardTarget([t],ledger,10),undefined);
 });
