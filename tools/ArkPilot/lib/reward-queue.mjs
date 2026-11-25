@@ -110,6 +110,39 @@ export async function verifiedFirstDrop(target, before, after, anchors) {
     anchors.some(a=>a.source==='Maa' && a.label==='结算三星标志');
 }
 
+function receivedItem(anchors, name, amount) {
+  return anchors.some(item => {
+    if (item.label !== name || !item.box) return false;
+    const [x,y,width,height] = item.box;
+    return anchors.some(count => {
+      if (!count.box || count.label.replace(/[,，]/g,'') !== String(amount)) return false;
+      const [cx,cy,cw,ch] = count.box;
+      const above = y+height/2-(cy+ch/2);
+      return above>height && above<height*4 && Math.abs(cx+cw/2-(x+width/2))<=height*2;
+    });
+  });
+}
+
+export async function rewardReceipt(target, before, after, anchors) {
+  if (!target.claimAvailable) {
+    if (await verifiedFirstDrop(target,before,after,anchors))
+      return {status:'首通已核',note:'首通已核：本关结算截图的关号、关名、三星与首次掉落标记吻合，同一轮首页源石增加 1，合成玉持平。'};
+    return;
+  }
+  const words = anchors.filter(a=>a.source==='OCR').map(a=>({...a,label:a.label.replace(/\s/g,'')}));
+  if (!before || !after || !words.some(a=>a.label==='获得物资')) return;
+  const gains = [];
+  for (const [currency,name] of [['prime','至纯源石'],['orundum','合成玉']]) {
+    if (!Number.isSafeInteger(before[currency]) || !Number.isSafeInteger(after[currency])) return;
+    const amount = after[currency]-before[currency];
+    if (amount<0) return;
+    if (amount===0) continue;
+    if (!receivedItem(words,name,amount)) return;
+    gains.push(name+' ×'+amount);
+  }
+  if (gains.length) return {status:'领取已核',note:'领取已核：获得物资画面中的 '+gains.join('、')+' 与本轮首页余额增量吻合。'};
+}
+
 function balanceDetail(image) {
   const regions = [[0.65,0,0.34,0.13,2],[0,0.55,0.21,0.085,3]].map(([x,y,w,h,zoom]) =>
     ({x:Math.floor(x*image.width),y:Math.floor(y*image.height),w:Math.floor(w*image.width),h:Math.floor(h*image.height),zoom}));
@@ -192,7 +225,7 @@ function renderProgress(manifest, ledger) {
   return lines.join('\n')+'\n';
 }
 
-export function rewardEvidence(stage) {
+export function rewardEvidence(stage, claimAvailable = false) {
   let battleSeen = false, best;
   return {
     observe(event) {
@@ -203,7 +236,8 @@ export function rewardEvidence(stage) {
       // The home navigation overlay leaves the stage and its reward text visible underneath.
       if (text.includes('公开招募') && /采购中心|干员寻访|档案/.test(text)) return;
       let score;
-      if (text.includes('结算三星标志') && text.includes('首次掉落')) score = 4;
+      if (claimAvailable && text.includes('获得物资') && /至纯源石|合成玉/.test(text)) score = 5;
+      else if (text.includes('结算三星标志') && text.includes('首次掉落')) score = 4;
       else if (/获得物资|结算三星标志|结算二星标志|磨难结算标志|行动结束/.test(text)) score = 3;
       else if (text.includes('已完成模拟作战')) score = 2;
       else if (battleSeen && stage?.startsWith('mem_') && /悖论模拟开始按钮|开始模拟/.test(text)) score = 1;
@@ -298,11 +332,11 @@ export async function runRewardQueue({filename, serial, device, config, runComma
   const imageFile = (id, type, preview) => writeFile(path.join(dir,id+'-'+type+'.jpg'),Buffer.from(preview.split(',')[1],'base64'));
   await imageFile('session','home',wallet.image);
   notify('已核对首页，至纯源石 '+wallet.prime+'，合成玉 '+wallet.orundum+'。');
-  const proofNote = '首通已核：本关结算截图的关号、关名、三星与首次掉落标记吻合，同一轮首页源石增加 1，合成玉持平。';
   for (const target of manifest.targets) {
     const row = ledger.items[target.id];
-    if (row?.status !== '余额待复核' || target.currency !== 'prime' || !target.stage) continue;
+    if (row?.status !== '余额待复核' || (!target.claimAvailable && (target.currency !== 'prime' || !target.stage))) continue;
     const proof = path.join(dir,target.id+'-result.jpg');
+    let verified;
     try {
       const {mtimeMs} = await stat(proof);
       const end = Date.parse(row.at);
@@ -312,16 +346,17 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       const image = jpeg.decode(await readFile(proof),{useTArray:true});
       const client = await device.checkGame(signal);
       const {anchors} = await recognize({png:PNG.sync.write(image),width:image.width,height:image.height,client},signal);
-      if (!await verifiedFirstDrop(target,row.before,row.after,anchors)) continue;
+      verified = await rewardReceipt(target,row.before,row.after,anchors);
+      if (!verified) continue;
     } catch {
       signal.throwIfAborted();
       continue;
     }
-    Object.assign(row,{status:'首通已核',note:proofNote,evidence:'result'});
+    Object.assign(row,verified,{evidence:'result'});
     delete row.review;
     ledger.opened[target.chapter] = true;
     await save();
-    notify(target.label+' · 已从该轮结算截图和首页账目复核首通。');
+    notify(target.label+' · '+verified.status+'。已核对本轮截图和首页账目。');
   }
   while (!signal.aborted) {
     const changed = (await stat(filename)).mtimeMs;
@@ -352,7 +387,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     ledger.items[t.id] = {...previous, status:'进行中', attempts, before, started:new Date().toISOString()};
     await save();
     notify(t.label+'，第 '+attempts+' 次核查。');
-    const evidence = rewardEvidence(t.stage);
+    const evidence = rewardEvidence(t.stage,t.claimAvailable);
     let report, usedGuide;
     const offered = new Set(previous.offeredGuideIds || []);
     const failed = failedGuides(previous);
@@ -403,9 +438,12 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     if (!t.claimAvailable && previous.status === '进行中' && report.startsWith('原已完成') &&
         wallet[t.currency]-before[t.currency] === t.amount) report = '首通已核（中断后复核） '+report;
     let status = reconcileReward(t,report,before,wallet);
-    if (status==='余额待复核' && evidence.best && await verifiedFirstDrop(t,before,wallet,evidence.best.anchors)) {
-      report = proofNote;
-      status = '首通已核';
+    if (status==='余额待复核' && evidence.best) {
+      const verified = await rewardReceipt(t,before,wallet,evidence.best.anchors);
+      if (verified) {
+        report = verified.note;
+        status = verified.status;
+      }
     }
     await imageFile(t.id,'home',wallet.image);
     const row = ledger.items[t.id] = {status,attempts,before,after:numbers(wallet),started:ledger.items[t.id].started,note:report,at:new Date().toISOString()};

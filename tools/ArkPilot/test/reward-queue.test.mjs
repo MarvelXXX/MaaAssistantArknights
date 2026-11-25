@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dismissStoneRecovery, nextRewardGuide, reconcileReward, rewardEvidence, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
+import {dismissStoneRecovery, nextRewardGuide, reconcileReward, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
 import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
 
 test('摆完挂机后仅对持续敞开的同一名干员面板交回控制', () => {
@@ -89,6 +89,27 @@ test('免费奖励按实机领取报告和两种余额核对，活跃度或附�
   assert.equal(reconcileReward(target,'原已完成',before,mail),'余额待复核');
   assert.equal(reconcileReward(target,'未完成 仅领取活跃度和龙门币',before,before),'未完成');
   assert.equal(reconcileReward(target,'领取已核',before,{...daily,prime:147}),'余额下降');
+});
+
+test('复核免费领取需同一张获得物资画面的币种、对应数量和余额增量全部吻合', async () => {
+  const target = {claimAvailable:true,currency:'orundum'};
+  const before = {prime:148,orundum:21578}, after = {...before,orundum:21678};
+  const ocr = (label,box) => ({source:'OCR',label,box});
+  const header = ocr('获得物资',[665,161,109,28]);
+  const currency = ocr('合成玉',[216,388,71,23]);
+  const quantity = ocr('100',[254,329,43,22]);
+  const money = ocr('龙门币',[403,388,71,23]);
+  const foreign = ocr('1,000',[426,329,58,21]);
+  const anchors = [header,currency,quantity,money,foreign];
+  assert.equal((await rewardReceipt(target,before,after,anchors)).status,'领取已核');
+  assert.equal(await rewardReceipt(target,before,{...after,prime:149},anchors),undefined);
+  assert.equal(await rewardReceipt(target,before,{...before,orundum:22578},anchors),undefined);
+  assert.equal(await rewardReceipt(target,before,after,[currency,quantity]),undefined);
+  assert.equal(await rewardReceipt(target,before,before,anchors),undefined);
+  const evidence = rewardEvidence(undefined,true);
+  evidence.observe({type:'frame',preview:'materials',anchors:[header,money,foreign]});
+  evidence.observe({type:'frame',preview:'currency',anchors});
+  assert.equal(evidence.best.preview,'currency');
 });
 
 test('理智和结晶不足时继续独立目标，保留待复核和前置关系', () => {
