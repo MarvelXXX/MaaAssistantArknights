@@ -37,6 +37,23 @@ export function nativeAction(a, hasPlan) {
   throw new Error('Maa 任务参数无效：代理刷图需要关卡和 1–100 次，自动战斗需要先导入作业。');
 }
 
+// A guided drag pauses the game clock. Kills and DP can both stay fixed until the drag happens.
+export function watchTutorialDialog() {
+  let lastCount, since;
+  return (phase, anchors, now) => {
+    const label = anchors.map(a=>a.label.replace(/\s/g,'')).find(s=>/^\d{1,3}[/／]\d{1,3}$/.test(s));
+    if (!phase.endsWith('BattleAvatarDialog') || !label) {
+      lastCount = undefined;
+      return false;
+    }
+    if (label !== lastCount) {
+      lastCount = label;
+      since = now;
+    }
+    return now - since >= 45000;
+  };
+}
+
 async function workspace(fn) {
   const dir = await mkdtemp(path.join(tmpdir(), 'arkpilot-maa-'));
   try { return await fn(dir); }

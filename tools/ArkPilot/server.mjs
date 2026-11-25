@@ -12,7 +12,7 @@ import { chooseModel, listModels, explainFrames, proposeTeam } from './lib/model
 import { runAgent } from './lib/agent.mjs';
 import { chapterRewards, stageRewards } from './lib/rewards.mjs';
 import { briefPlan, checkPlan, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from './lib/guides.mjs';
-import { executeMaa, maaHome, nativeAction, recognizeRecording, scanRoster } from './lib/maa.mjs';
+import { executeMaa, maaHome, nativeAction, recognizeRecording, scanRoster, watchTutorialDialog } from './lib/maa.mjs';
 import { adaptGuide, assess, normalizeRoster } from './lib/roster.mjs';
 import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
 import { runRewardQueue } from './lib/reward-queue.mjs';
@@ -201,11 +201,18 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
               !s.choices.some(c=>c.status === '持有且满足已知要求')))) throw Object.assign(new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。'),{beforeStart:true});
             const observer = new AbortController();
             const watching = AbortSignal.any([signal,observer.signal]);
+            const stalled = fixedTeam ? watchTutorialDialog() : null;
+            let phase = '';
             let timer;
             const updateFrame = async () => {
               try {
                 const frame = await devicePreview(device, watching);
-                if (!watching.aborted) emit({type:'frame',...frame});
+                if (!watching.aborted) {
+                  emit({type:'frame',...frame});
+                  if (stalled?.(phase,frame.anchors,Date.now())) {
+                    observer.abort(new Error('教学停在同一击杀数和指引对白。当前战斗仍在进行；按高亮卡片与箭头用 deploy 完成指引，不要等待费用增长或重开。'));
+                  }
+                }
               } catch {
                 // The native task monitors its own connection. Retry a missed preview on the next tick.
               }
@@ -214,7 +221,10 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             timer = setTimeout(updateFrame, 1500);
             try {
               if (guideId) onGuideStart?.(guideId);
-              return await native(a, {home,device,serial:data.serial,guide,formation,signal,progress:text=>emit({type:'core',text})});
+              return await native(a, {home,device,serial:data.serial,guide,formation,signal:watching,progress:text=>{
+                phase = text;
+                emit({type:'core',text});
+              }});
             } finally {
               observer.abort();
               clearTimeout(timer);

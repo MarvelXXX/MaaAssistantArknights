@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {nextRewardGuide, reconcileReward, selectRewardTarget} from '../lib/reward-queue.mjs';
+import {watchTutorialDialog} from '../lib/maa.mjs';
 
 test('首通须有实机结论和对应余额变化，已通关不重复记账', () => {
   const t = {amount:200,currency:'orundum'};
@@ -51,4 +52,16 @@ test('待复核的战败只在增加可用新作业时恢复，到账异常持�
   assert.equal(selectRewardTarget([t],ledger,10),undefined);
   row.status='首通已核';
   assert.equal(selectRewardTarget([t],ledger,10),undefined);
+});
+
+test('固定队教学只在对白与击杀计数持续停滞时交回当前战斗', () => {
+  const stalled=watchTutorialDialog();
+  const frame=n=>[{label:n+' / 9'}];
+  assert.equal(stalled('BattleAvatarDialog',frame(1),0),false);
+  assert.equal(stalled('BattleAvatarDialog',frame(2),40000),false);
+  assert.equal(stalled('BattleAvatarDialog',frame(2),84999),false);
+  assert.equal(stalled('BattleAvatarDialog',frame(2),85000),true);
+  assert.equal(stalled('UseSkill',frame(2),90000),false);
+  assert.equal(stalled('BattleAvatarDialog',frame(2),95000),false);
+  assert.equal(stalled('BattleAvatarDialog',[],160000),false);
 });
