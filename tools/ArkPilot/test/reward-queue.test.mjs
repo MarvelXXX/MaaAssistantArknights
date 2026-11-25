@@ -25,3 +25,8 @@ test('理智和结晶不足时继续独立目标，保留待复核和前置关�
   ledger.items.a={status:'原已完成'};
   assert.equal(selectRewardTarget(targets,ledger,10).id,'b');
 });
+
+test('恢复时先核对中断项，避免把另一关的奖励记到旧账上', () => {
+  const targets=[{id:'new',requires:[]},{id:'interrupted',requires:[]}];
+  assert.equal(selectRewardTarget(targets,{items:{interrupted:{status:'进行中'}},opened:{}},0).id,'interrupted');
+});

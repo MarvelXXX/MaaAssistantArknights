@@ -188,16 +188,16 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         const home = await getHome();
         if (config) config.model = await chooseModel(config, signal);
         const emit = eventStream(res);
-        async function runCommand({instruction, signal, emit, history = [], guide = null, limit, expectedStage}) {
+        async function runCommand({instruction, signal, emit, history = [], guide = null, limit, expectedStage, allowNative = true, fixedTeam = false}) {
           let adaptationBlocked = false;
-          let formation = data.formation === true;
+          let formation = !fixedTeam && data.formation === true;
           const runNative = async a => {
             if (expectedStage && (!['Copilot','ParadoxCopilot'].includes(a.task) || !await matchesRewardStage(guide,expectedStage))) {
               throw Object.assign(new Error('当前作业不是本项首通目标，请用准确的关卡 ID 重新载入。'),{beforeStart:true});
             }
             const paradox = (a.task === 'Copilot' || a.task === 'ParadoxCopilot') && await paradoxStageId(guide);
             if (a.task === 'ParadoxCopilot' && !paradox) throw Object.assign(new Error('请先导入目标悖论模拟的作业。'),{beforeStart:true});
-            if (a.task === 'Copilot' && !paradox && (adaptationBlocked || roster && assess(guide,roster).some(s=>
+            if (a.task === 'Copilot' && !paradox && !fixedTeam && (adaptationBlocked || roster && assess(guide,roster).some(s=>
               !s.choices.some(c=>c.status === '持有且满足已知要求')))) throw Object.assign(new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。'),{beforeStart:true});
             const observer = new AbortController();
             const watching = AbortSignal.any([signal,observer.signal]);
@@ -286,13 +286,13 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             guide = material.plan;
             adaptationBlocked = false;
             guidance.notes = (material.notes || guide.doc?.details || '').slice(0,6000);
-            formation = data.formation === true;
+            formation = !fixedTeam && data.formation === true;
             guidance.plan = briefPlan(guide);
             emit({type:'guide_loaded',...material});
             return guidance.plan;
           };
           await runAgent({ config, device, instruction, history, requireAdaptation:queue ? false : undefined,
-            readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home ? runNative : null });
+            readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home && allowNative ? runNative : null });
         }
         if (queue) {
           await runRewardQueue({filename:queueFile, serial:data.serial,

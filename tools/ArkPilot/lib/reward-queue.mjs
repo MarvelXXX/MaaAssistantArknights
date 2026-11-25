@@ -1,9 +1,10 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import jpeg from 'jpeg-js';
 import { decide } from './model.mjs';
 import { recognize } from './vision.mjs';
+import { checkPlan, importGuide, matchesRewardStage } from './guides.mjs';
 
 const minute = 60000;
 const closed = new Set(['首通已核', '领取已核', '原已完成']);
@@ -17,13 +18,16 @@ function validateManifest(manifest, serial) {
   for (const t of manifest.targets) {
     if (!/^[a-zA-Z0-9_#@.-]{1,100}$/.test(t.id) || ids.has(t.id) || !t.label || !t.route ||
         !Number.isInteger(t.amount) || t.amount < 1 || !['prime','orundum'].includes(t.currency) ||
-        !Array.isArray(t.requires)) throw new Error('首通清单包含无效或重复的目标。');
+        !Array.isArray(t.requires) || (t.guideId && !/^[1-9]\d{0,9}$/.test(t.guideId))) throw new Error('首通清单包含无效或重复的目标。');
+    if (t.plan) checkPlan(t.plan);
     ids.add(t.id);
   }
   if (manifest.targets.some(t => t.requires.some(id => !ids.has(id) || id === t.id))) throw new Error('清单含未知前置关卡。');
 }
 
 export function selectRewardTarget(targets, ledger, now) {
+  const interrupted = targets.find(t=>ledger.items[t.id]?.status==='进行中');
+  if (interrupted) return interrupted;
   return targets.find(t => {
     const row = ledger.items[t.id];
     return !closed.has(row?.status) && !row?.review && !(row?.nextAt > now) &&
@@ -88,7 +92,7 @@ const numbers = wallet => ({prime:wallet.prime, orundum:wallet.orundum});
 
 function renderProgress(manifest, ledger) {
   const titles = new Map(manifest.targets.map(t=>[t.id,t.label.replace(/[|\r\n]/g,' ')]));
-  const rows = Object.entries(ledger.items);
+  const rows = Object.entries(ledger.items).filter(([id])=>titles.has(id));
   const cleared = rows.filter(([,r])=>r.status==='首通已核').length;
   const claimed = rows.filter(([,r])=>r.status==='领取已核').length;
   const prior = rows.filter(([,r])=>r.status==='原已完成').length;
@@ -108,8 +112,13 @@ function renderProgress(manifest, ledger) {
 }
 
 export async function runRewardQueue({filename, serial, device, config, runCommand, emit, signal}) {
-  const manifest = JSON.parse((await readFile(filename,'utf8')).replace(/^\uFEFF/,''));
-  validateManifest(manifest, serial);
+  async function loadManifest() {
+    const data = JSON.parse((await readFile(filename,'utf8')).replace(/^\uFEFF/,''));
+    validateManifest(data,serial);
+    return data;
+  }
+  let modified = (await stat(filename)).mtimeMs;
+  let manifest = await loadManifest();
   const dir = filename + '.run';
   await mkdir(dir,{recursive:true});
   const checkpoint = path.join(dir,'progress.json');
@@ -128,9 +137,9 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await rename(report+'.tmp',report);
   };
   const notify = text => { emit({type:'checkpoint',text}); emit({type:'core',text}); };
-  const play = async (instruction, limit, onFrame, expectedStage) => {
+  const play = async (instruction, {limit, onFrame, expectedStage, guide, allowNative = true, fixedTeam = false}) => {
     let result;
-    await runCommand({instruction, limit, expectedStage, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
+    await runCommand({instruction, limit, expectedStage, guide, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
       if (e.type === 'end') { result = e; return; }
       if (e.type === 'frame') onFrame?.(e);
       emit(e);
@@ -142,7 +151,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     catch (error) {
       signal.throwIfAborted();
       if (error.message.includes('UID')) throw error;
-      await play('回到当前游戏账号的首页，若有结算请先观察再退出，有未结束的实战等到结算。仅可用原账号正常快捷登录。停在首页，不领取其他奖励。'+spendRule,30);
+      await play('回到当前游戏账号的首页，若有结算请先观察再退出，有未结束的实战等到结算。仅可用原账号正常快捷登录。停在首页，不领取其他奖励。'+spendRule,{limit:30,allowNative:false});
       return readWallet(device,config,signal,manifest.uid);
     }
   };
@@ -151,6 +160,13 @@ export async function runRewardQueue({filename, serial, device, config, runComma
   await imageFile('session','home',wallet.image);
   notify('已核对首页，至纯源石 '+wallet.prime+'，合成玉 '+wallet.orundum+'。');
   while (!signal.aborted) {
+    const changed = (await stat(filename)).mtimeMs;
+    if (changed !== modified) {
+      const next = await loadManifest();
+      if (next.account !== manifest.account || next.uid !== manifest.uid) throw new Error('账号清单已切换，需从首页重新核查。');
+      manifest = next;
+      modified = changed;
+    }
     const t = selectRewardTarget(manifest.targets,ledger,Date.now());
     if (!t) {
       const remaining = manifest.targets.filter(item=>!closed.has(ledger.items[item.id]?.status)).length;
@@ -173,14 +189,27 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await save();
     notify(t.label+'，第 '+attempts+' 次核查。');
     let report, evidence;
-    const caution = previous.status === '进行中' ? '上轮中断，务必先核对本关已领取状态。' : '';
+    const credited = previous.status==='进行中' && wallet[t.currency]-before[t.currency]===t.amount;
+    const caution = credited ? '上次中断后余额已增加对应金额。仅去本关详情核对完成标志，不得再次开战。' :
+      previous.status === '进行中' ? '上轮中断，务必先核对本关已领取状态。' : '';
     const previousNote = previous.note ? '上次观察：'+previous.note.slice(0,450)+'。更换失败的作业或阵容。' : '';
     try {
-      report = await play('本轮只处理 '+t.label+'。'+t.route+'。'+caution+previousNote+
-        '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。'+spendRule,75,e=>{
-        const labels = e.anchors.map(a=>a.label).join('').replace(/\s/g,'');
-        if (/已完成模拟作战|获得物资|结算三星标志|磨难结算标志|行动结束/.test(labels)) evidence=e.preview;
-      },t.stage || undefined);
+      let guide = t.plan;
+      if (!guide && t.guideId && !previous.note) {
+        try { guide = (await importGuide(t.guideId,signal)).plan; }
+        catch { signal.throwIfAborted(); }
+      }
+      if (guide && (!t.stage || !await matchesRewardStage(guide,t.stage))) throw new Error('预载作业与本项目标不符。');
+      if (guide) emit({type:'guide_loaded',plan:guide});
+      const loaded = guide ? '本项作业已经按真实关号核对并载入，直接用当前附件，无需再次检索或导入。' : '';
+      report = await play('本轮只处理 '+t.label+'。'+t.route+'。'+caution+previousNote+loaded+
+        '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。'+spendRule,{
+          limit:75, expectedStage:t.stage, guide, allowNative:!credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
+          onFrame:e=>{
+            const labels = e.anchors.map(a=>a.label).join('').replace(/\s/g,'');
+            if (/已完成模拟作战|获得物资|结算三星标志|磨难结算标志|行动结束/.test(labels)) evidence=e.preview;
+          }
+        });
     } catch (error) { signal.throwIfAborted(); report='未完成 '+error.message; }
     wallet = await homeWallet();
     // An interrupted successful battle may already have been credited on this run's first frame.
