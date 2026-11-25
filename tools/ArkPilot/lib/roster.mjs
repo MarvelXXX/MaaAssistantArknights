@@ -82,6 +82,12 @@ export function assess(plan,roster) {
   })}));
 }
 
+export function unconfirmedSlots(plan,roster) {
+  return assess(plan,roster)
+    .filter(slot=>!slot.choices.some(choice=>choice.status === '持有且满足已知要求'))
+    .map(slot=>slot.slot);
+}
+
 export async function adaptGuide(plan,roster,notes,propose) {
   checkPlan(plan);
   const board = await stageBoard(plan.stage_name), layout = board?.tiles;

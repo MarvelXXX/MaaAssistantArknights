@@ -13,7 +13,7 @@ import { runAgent } from './lib/agent.mjs';
 import { chapterRewards, stageRewards } from './lib/rewards.mjs';
 import { briefPlan, checkPlan, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from './lib/guides.mjs';
 import { executeMaa, maaHome, nativeAction, pausedBattleFrame, recognizeRecording, scanRoster, watchBattlePause, watchTutorialDialog } from './lib/maa.mjs';
-import { adaptGuide, assess, normalizeRoster } from './lib/roster.mjs';
+import { adaptGuide, normalizeRoster, unconfirmedSlots } from './lib/roster.mjs';
 import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
 import { runRewardQueue } from './lib/reward-queue.mjs';
 
@@ -144,7 +144,10 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
           } finally { active = false; }
         }
         case '/api/maa': return json(res,200,{home:await getHome()});
-        case '/api/guides/search': return json(res,200,{results:await searchGuides(data.query,signal,data.videoCode)});
+        case '/api/guides/search': {
+          const roster = data.roster && await normalizeRoster(data.roster);
+          return json(res,200,{results:await searchGuides(data.query,signal,data.videoCode,false,roster && (plan=>unconfirmedSlots(plan,roster)))});
+        }
         case '/api/guides/import': return json(res,200,await importGuide(data.value,signal));
         case '/api/guides/frames': return json(res,200,await explainFrames(modelConfig(data),data.frames,signal));
         case '/api/guides/check': {
@@ -197,8 +200,9 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             }
             const paradox = (a.task === 'Copilot' || a.task === 'ParadoxCopilot') && await paradoxStageId(guide);
             if (a.task === 'ParadoxCopilot' && !paradox) throw Object.assign(new Error('请先导入目标悖论模拟的作业。'),{beforeStart:true});
-            if (a.task === 'Copilot' && !paradox && !fixedTeam && (adaptationBlocked || roster && assess(guide,roster).some(s=>
-              !s.choices.some(c=>c.status === '持有且满足已知要求')))) throw Object.assign(new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。'),{beforeStart:true});
+            if (a.task === 'Copilot' && !paradox && !fixedTeam && (adaptationBlocked || roster && unconfirmedSlots(guide,roster).length)) {
+              throw Object.assign(new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。'),{beforeStart:true});
+            }
             const observer = new AbortController();
             const watching = AbortSignal.any([signal,observer.signal]);
             const stalled = fixedTeam ? watchTutorialDialog() : null;
@@ -249,7 +253,9 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
           }
           emit({ type: 'model', model: config.model });
           const guidance = {notes:!queue && typeof data.notes === 'string' ? data.notes.slice(0,6000) : '',plan:briefPlan(guide),
-            roster:roster && {complete:roster.complete,operators:roster.operators.map(({name,owned,role,elite,level})=>({name,owned,role,elite,level}))}};
+            roster:roster && {complete:roster.complete,operators:roster.operators.map(
+              ({name,owned,role,elite,level,skill_level,skill_levels,potential,module,module_level})=>
+                ({name,owned,role,elite,level,skill_level,skill_levels,potential,module,module_level}))}};
           const candidates = new Set(instruction.match(/\b[1-9]\d{0,9}\b/g) || []);
           if (!queue && Array.isArray(data.recentSearch)) {
             guidance.candidates = data.recentSearch.slice(0,20).filter(r => typeof r?.id === 'string' && /^[1-9]\d{0,9}$/.test(r.id))
@@ -297,7 +303,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
               return {ready:true,reason:result.reason,changes:result.changes,plan:guidance.plan};
             }
             if (a.type === 'find_guide') {
-              const results = await searchGuides(a.stage,signal);
+              const results = await searchGuides(a.stage,signal,'',false,roster && (plan=>unconfirmedSlots(plan,roster)));
               for (const r of results) candidates.add(r.id);
               emit({type:'guide_search',stage:a.stage,results});
               return results;

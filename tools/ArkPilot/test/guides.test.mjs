@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from '../server.mjs';
 import { checkPlan, deploymentTarget, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from '../lib/guides.mjs';
 import { nativeAction } from '../lib/maa.mjs';
+import { normalizeRoster, unconfirmedSlots } from '../lib/roster.mjs';
 import { runAgent, validateDecision } from '../lib/agent.mjs';
 import { explainFrames } from '../lib/model.mjs';
 
@@ -83,6 +84,18 @@ test('同名活动关和悖论能分别检索，首通任务核对实际关卡 I
   assert.deepEqual(await searchGuides('一夫当关',getSignal()),[{id:'45047',title:'煌',stage:'mem_huang_1'}]);
   assert.equal(await matchesRewardStage({stage_name:'BW-5'},'mem_huang_1'),false);
   assert.equal(await matchesRewardStage({stage_name:'ZT-1'},'act29side_01'),true);
+});
+
+test('按名册检索保留未知编队，优先列出技能和组内候选已核对的作业',async t=>{
+  const roster=await normalizeRoster({operators:[{name:'芬',elite:1,level:1,skill_level:4},{name:'德克萨斯',elite:2,level:50,skill_level:7}]});
+  const early={name:'芬',skill:1,requirements:{skill_level:7}};
+  const ready={name:'德克萨斯',skill:1,requirements:{skill_level:7}};
+  const plans=[{}, {opers:[early]}, {groups:[{name:'先锋',opers:[early,ready]}]}];
+  t.mock.method(globalThis,'fetch',async()=>Response.json({status_code:200,data:{
+    data:plans.map((p,i)=>({id:10+i,content:JSON.stringify({stage_name:'main_01-07',...p})})),
+  }}));
+  const rows=await searchGuides('1-7',getSignal(),'',false,p=>unconfirmedSlots(p,roster));
+  assert.deepEqual(rows.map(r=>[r.id,r.unconfirmedSlots]),[['12',[]],['11',['芬']],['10',undefined]]);
 });
 
 test('对话中查到的作业可调用 Maa，Maa 完成后再次截图', async () => {

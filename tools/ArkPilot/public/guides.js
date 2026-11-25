@@ -206,12 +206,14 @@ export function setupGuides({post,events,getConfig,runDirect}) {
     recentSearch = results.slice(0,20);
     $('searchResults').replaceChildren(...results.map(r => {
       const button = document.createElement('button'); button.className = 'quiet';
-      button.textContent = '#' + r.id + ' · ' + r.title; button.onclick = () => importValue(r.id); return button;
+      let label = '#' + r.id + ' · ' + r.title;
+      if (r.unconfirmedSlots) label += r.unconfirmedSlots.length ? ' · 待核对 ' + r.unconfirmedSlots.join('、') : ' · 各编队位均有候选';
+      button.textContent = label; button.onclick = () => importValue(r.id); return button;
     }));
   }
   function search(videoCode) { return job('正在搜索 PRTS 作业…',async signal => {
     $('searchResults').replaceChildren();
-    const {results} = await request('guides/search',{query:$('stageSearch').value,videoCode},signal);
+    const {results} = await request('guides/search',{query:$('stageSearch').value,videoCode,roster:currentRoster()},signal);
     showResults(results);
     status(results.length ? '选择搜索结果以导入。' : videoCode ? '该关热门作业中未找到对此 BV 的引用。' : '未找到匹配关卡的作业，也可输入作业码。');
   }); }

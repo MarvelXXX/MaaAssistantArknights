@@ -13,7 +13,7 @@ const author = {stage_name:'main_01-07',opers:[{name:'能天使',skill:1,require
     {type:'Deploy',name:'回费位',direction:'Right',location:[4,1]},
     {type:'Deploy',name:'能天使',direction:'Down',location:[2,1]},
     {type:'Retreat',name:'能天使',kills:20}]};
-const box = {operators:[{name:'能天使',owned:false},{name:'克洛丝',elite:1,level:55,skill_level:7},{name:'讯使',elite:1,level:50}]};
+const box = {operators:[{name:'能天使',owned:false},{name:'克洛丝',elite:1,level:55,skill_level:7,skill_levels:[7]},{name:'讯使',elite:1,level:50}]};
 const proposal = {status:'ready',reason:'采用同为速射手的克洛丝和组内先锋；验证右侧射程覆盖。',picks:[
   {slot:'能天使',id:'char_124_kroos',basedOn:'能天使',skill:1},
   {slot:'回费位',id:'char_198_blackd',basedOn:'讯使',skill:1}],edits:[{step:2,location:[3,1],direction:'Right',costs:12}]};
@@ -115,9 +115,11 @@ test('要求生成替补作业时不能把文字承诺当作完成，校验失�
 test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无设备时可适配',async t=>{
   const decision = a => ({intent:'operate',goal:'按我的干员适配',note:'核对编队',action:{type:a,...(a==='maa'?{task:'Copilot'}:{})}});
   let actions = ['adapt_guide','maa','finish'];
+  let observedRoster;
   const model = await listen(http.createServer(async(req,res)=>{
     let body=''; for await (const part of req) body+=part;
     const msgs=JSON.parse(body).messages;
+    if (!observedRoster && !msgs[0].content.includes('每位一人')) observedRoster=JSON.parse(msgs[1].content).guidance.roster;
     const result = msgs[0].content.includes('每位一人') ? proposal : decision(actions.shift());
     res.setHeader('Content-Type','application/json'); res.end(JSON.stringify({choices:[{message:{content:JSON.stringify(result)}}]}));
   }),t);
@@ -136,6 +138,9 @@ test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无�
   assert.equal(first.at(-1).outcome,'finish');
   assert.deepEqual(native[0].guide,first.find(e=>e.type==='guide_loaded').plan);
   assert.equal(native[0].guide.actions[1].name,'克洛丝'); assert.equal(native[0].formation,true);
+  const sniper=observedRoster.operators.find(o=>o.name==='克洛丝');
+  assert.equal(sniper.skill_level,7);
+  assert.deepEqual(sniper.skill_levels,[7]);
   actions=['adapt_guide','finish'];
   assert.equal((await run({researchOnly:true})).at(-1).outcome,'finish');
   assert.equal(devices,1); assert.equal(native.length,1);

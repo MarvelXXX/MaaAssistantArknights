@@ -106,13 +106,13 @@ export async function publicJson(url, signal, headers = {}, maxBytes = 4 * 1024 
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-export async function searchGuides(query, signal, videoCode = '', includeVideos = false) {
+export async function searchGuides(query, signal, videoCode = '', includeVideos = false, checkRoster) {
   if (videoCode && !/^BV[a-zA-Z0-9]{10}$/.test(videoCode)) throw new Error('视频编号无效。');
   const {searchIds, aliases} = await stageAliases(query);
   const matches = new Map();
   for (const id of searchIds) {
     const url = new URL('query', station);
-    url.search = new URLSearchParams({page:'1', limit:videoCode ? '50' : '20', orderBy:'views', desc:'true', levelKeyword:id});
+    url.search = new URLSearchParams({page:'1', limit:videoCode || checkRoster ? '50' : '20', orderBy:'views', desc:'true', levelKeyword:id});
     const reply = await publicJson(url, signal);
     if (reply.status_code !== 200 || !Array.isArray(reply.data?.data)) throw new Error('作业站搜索失败。');
     for (const item of reply.data.data) {
@@ -121,13 +121,19 @@ export async function searchGuides(query, signal, videoCode = '', includeVideos 
         if (!idPattern.test(String(item.id)) || !aliases.includes(plan.stage_name.toLowerCase())) continue;
         if (videoCode && !(String(plan.doc?.details || '') + ' ' + String(plan.doc?.title || '')).includes(videoCode)) continue;
         const row = { id: String(item.id), title: String(plan.doc?.title || plan.stage_name).slice(0,150) };
+        if (checkRoster && (plan.opers?.length || plan.groups?.length)) row.unconfirmedSlots = checkRoster(plan);
         if (includeVideos) row.videos = [...new Set(String(plan.doc?.details || '').match(/BV[a-zA-Z0-9]{10}/g) || [])].slice(0,3);
         if (searchIds.length > 1) row.stage = plan.stage_name;
         matches.set(row.id,row);
       } catch { continue; }
     }
   }
-  return [...matches.values()];
+  const rows = [...matches.values()];
+  if (checkRoster) {
+    const unresolved = row => row.unconfirmedSlots?.length ?? Number.MAX_SAFE_INTEGER;
+    rows.sort((a,b)=>unresolved(a)-unresolved(b));
+  }
+  return rows;
 }
 
 function planId(value) {
