@@ -12,7 +12,7 @@ import { chooseModel, listModels, explainFrames, proposeTeam } from './lib/model
 import { runAgent } from './lib/agent.mjs';
 import { chapterRewards, stageRewards } from './lib/rewards.mjs';
 import { briefPlan, checkPlan, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from './lib/guides.mjs';
-import { executeMaa, maaHome, nativeAction, pausedBattleFrame, recognizeRecording, scanRoster, watchBattlePause, watchTutorialDialog } from './lib/maa.mjs';
+import { executeMaa, maaHome, nativeAction, pausedBattleFrame, recognizeRecording, scanRoster, watchBattlePause, watchDaemonSelection, watchTutorialDialog } from './lib/maa.mjs';
 import { adaptGuide, normalizeRoster, rosterFit } from './lib/roster.mjs';
 import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
 import { runRewardQueue } from './lib/reward-queue.mjs';
@@ -207,6 +207,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             const watching = AbortSignal.any([signal,observer.signal]);
             const stalled = fixedTeam ? watchTutorialDialog() : null;
             const watchPause = afterStep ? watchBattlePause() : null;
+            const selectedPanel = watchDaemonSelection(guide);
             let phase = '';
             let timer;
             const updateFrame = async () => {
@@ -223,6 +224,8 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
                     }
                   } else if (pause==='stalled') {
                     observer.abort(new Error('战斗持续暂停。请核实右上角继续按钮并从同一局接手。'));
+                  } else if (selectedPanel(phase,frame,Date.now())) {
+                    observer.abort(new Error('Maa 已摆完，干员详情持续敞开，游戏处于慢速。接管同一局，先点地图空白处收起面板，避开撤退与技能按钮，再观察敌人和结算。不要重开。'));
                   } else if (stalled?.(phase,frame.anchors,Date.now())) {
                     observer.abort(new Error('教学停在同一击杀数和指引对白。当前战斗仍在进行；按高亮卡片与箭头用 deploy 完成指引，不要等待费用增长或重开。'));
                   }

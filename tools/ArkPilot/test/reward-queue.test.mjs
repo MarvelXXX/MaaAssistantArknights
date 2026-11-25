@@ -1,7 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {nextRewardGuide, reconcileReward, rewardEvidence, runRewardStage, selectRewardTarget, verifyWalletAccount} from '../lib/reward-queue.mjs';
-import {watchBattlePause,watchTutorialDialog} from '../lib/maa.mjs';
+import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
+
+test('摆完挂机后仅对持续敞开的同一名干员面板交回控制', () => {
+  const watch=watchDaemonSelection({opers:[{name:'星熊'}],groups:[{opers:[{name:'红'}]}]});
+  const hud={label:'战斗防御点图标',source:'Maa'};
+  const frame=(name,x=30)=>({width:1600,anchors:[hud,...[name,'攻击 540','防御 1160'].map(label=>({label,source:'OCR',box:[x,190,55,25]}))]});
+  assert.equal(watch('Deploy',frame('星熊'),0),false);
+  assert.equal(watch('SkillDaemon',frame('星熊',1300),5000),false);
+  assert.equal(watch('SkillDaemon',frame('星熊'),10000),false);
+  assert.equal(watch('SkillDaemon',frame('星熊'),16000),false);
+  assert.equal(watch('SkillDaemon',{width:1600,anchors:[hud]},22000),false);
+  assert.equal(watch('SkillDaemon',frame('星熊'),28000),false);
+  assert.equal(watch('SkillDaemon',frame('星熊'),34000),true);
+  assert.equal(watch('SkillDaemon',frame('红'),40000),false);
+  assert.equal(watch('SkillDaemon',frame('红'),60000),false);
+  assert.equal(watch('SkillDaemon',{width:1600,anchors:[]},66000),false);
+  assert.equal(watch('SkillDaemon',frame('红'),70000),false);
+});
 
 test('悖论凭证优先保留无遮挡结算，OCR漏读时仅保存战后关卡页', () => {
   const first = rewardEvidence('mem_ifrit_1');

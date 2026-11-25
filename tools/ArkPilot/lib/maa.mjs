@@ -75,6 +75,26 @@ export function watchBattlePause() {
   };
 }
 
+export function watchDaemonSelection(guide) {
+  const names = new Set([...(guide?.opers || []), ...(guide?.groups || []).flatMap(g=>g.opers)].map(op=>op.name));
+  let selected, since, lastSeen;
+  return (phase, frame, now) => {
+    if (!/^(SkillDaemon|摆完挂机)(?:$| ·)/i.test(phase) ||
+        !frame.anchors.some(a=>a.source==='Maa' && a.label==='战斗防御点图标')) {
+      selected = undefined;
+      return false;
+    }
+    const panel = frame.anchors.filter(a=>a.source==='OCR' && a.box && a.box[0]+a.box[2]/2 < frame.width*0.35);
+    const name = panel.map(a=>a.label.replace(/\s/g,'')).find(s=>names.has(s));
+    const stats = panel.map(a=>a.label).join('').replace(/\s/g,'');
+    if (!name || ['攻击','防御','阻挡','生命','特性'].filter(s=>stats.includes(s)).length<2) return false;
+    // Brief selections are normal while Maa activates skills. Allow one missed OCR sample.
+    if (name!==selected || now-lastSeen>14000) { selected=name; since=now; }
+    lastSeen=now;
+    return now-since>=20000;
+  };
+}
+
 async function workspace(fn) {
   const dir = await mkdtemp(path.join(tmpdir(), 'arkpilot-maa-'));
   try { return await fn(dir); }
