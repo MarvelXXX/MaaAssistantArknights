@@ -173,14 +173,14 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
       if (a.task === 'ParadoxCopilot' && !stage) throw new Error('从干员列表启动悖论模拟需要对应的悖论作业。');
       await writeFile(filename, JSON.stringify(stage ? {...plan,stage_name:stage} : plan), 'utf8');
       if (afterStep != null) {
-        if (a.task!=='Copilot' || stage || !Number.isInteger(afterStep) || afterStep<1 || afterStep>=plan.actions.length) {
+        if (a.task!=='Copilot' || !Number.isInteger(afterStep) || afterStep<1 || afterStep>=plan.actions.length) {
           throw new Error('续打起点与作业不匹配。');
         }
         const actions = plan.actions.slice(afterStep);
         const allowed = ['Deploy','Skill','Retreat','SpeedUp','SkillDaemon','SkillUsage','Output','部署','技能','撤退','二倍速','摆完挂机'];
         if (actions.some(step=>!allowed.includes(step.type || 'Deploy'))) throw new Error('续打仅接受部署、技能和其他战斗内作业步骤。');
         type = 'SingleStep';
-        stageTask = {type:'copilot',subtype:'stage',details:{stage_name:plan.stage_name}};
+        stageTask = {type:'copilot',subtype:'stage',details:{stage_name:stage || plan.stage_name}};
         params = {type:'copilot',subtype:'action',details:{actions}};
       } else if (stage) {
         type = 'ParadoxCopilot';
