@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createServer } from '../server.mjs';
 import { checkPlan, deploymentTarget, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from '../lib/guides.mjs';
-import { nativeAction } from '../lib/maa.mjs';
+import { copilotDefeatReport, nativeAction, recognizedDefeat } from '../lib/maa.mjs';
 import { normalizeRoster, rosterFit } from '../lib/roster.mjs';
 import { runAgent, validateDecision } from '../lib/agent.mjs';
 import { explainFrames } from '../lib/model.mjs';
@@ -12,6 +15,20 @@ const plan = {stage_name:'main_01-07', opers:[{name:'令',skill:3}], actions:[
 ]};
 const getSignal = () => AbortSignal.timeout(10000);
 const reply = (action,intent='operate') => ({intent,goal:'查作业',note:'核对结果',action});
+
+test('原生任务链结束时保留实战失败回调与最近一次有效击倒数', async t => {
+  const defeat = {details:{task:'FightMissionFailed-Bypass',result:{text:'任务失败'}}};
+  assert.equal(recognizedDefeat('20001',defeat),true);
+  assert.equal(recognizedDefeat('20002',{details:{task:'Copilot@FightMissionFailedAndStop'}}),true);
+  assert.equal(recognizedDefeat('20003',defeat),false);
+  assert.equal(recognizedDefeat('20001',{pre_task:defeat.details.task,details:{task:'EndOfAction-Bypass'}}),false);
+  const work = await mkdtemp(path.join(tmpdir(),'arkpilot-defeat-test-'));
+  t.after(()=>rm(work,{force:true,recursive:true}));
+  assert.equal(await copilotDefeatReport(work,''),'Maa 已识别到本局任务失败。');
+  await mkdir(path.join(work,'debug'));
+  await writeFile(path.join(work,'debug','asst.log'),'[TRC] Kills: 1 / 68\r\n[TRC] Kills: 3 / 68\r\n[TRC] Kills: 69 / 68\r\n');
+  assert.match(await copilotDefeatReport(work,'UseSkill · 德克萨斯'),/最后识别的击倒数 3\/68。失败前最后尝试的作业动作 UseSkill · 德克萨斯/);
+});
 
 test('解析带清晰度的单段 MP4 并保留 Range，拒绝其他封装', async t => {
   let format='mp4720';
