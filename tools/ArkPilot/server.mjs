@@ -288,8 +288,8 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
               emit({type:'sources',results:[page]}); cache.set(key,page); return page;
             }
             if (a.type === 'analyze_video') {
-              const clip = await analyzeVideo(config,a,signal);
-              videoNotes.push({url:clip.url,notes:clip.notes});
+              const clip = await analyzeVideo(config,a,signal,expectedStage);
+              videoNotes.push({guideId,url:clip.url,title:clip.title,notes:clip.notes});
               guidance.notes = (clip.url+'\n'+clip.notes+'\n'+guidance.notes).slice(0,6000);
               emit({type:'video_notes',clip,notes:guidance.notes}); cache.set(key,clip); return clip;
             }
@@ -298,7 +298,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
               if (!roster || !guide) throw new Error('适配需要已导入的作业和当前账号的干员名册。');
               const recentRequests = history.filter(m=>m.role==='user').slice(-3).map(m=>m.text);
               const result = await adaptGuide(guide,roster,guidance.notes,
-                m=>proposeTeam(config,{...m,instruction,recentRequests,wiki:excerpts.slice(-3),videos:videoNotes.slice(-2)},signal));
+                m=>proposeTeam(config,{...m,guideId,instruction,recentRequests,wiki:excerpts.slice(-3),videos:videoNotes.slice(-2)},signal));
               if (!result.ready) return {ready:false,reason:result.reason,assessment:result.assessment};
               guide = result.plan; adaptationBlocked = false; formation = !fixedTeam; guidance.plan = briefPlan(guide);
               guidance.notes = (result.reason+'\n'+guidance.notes).slice(0,6000);

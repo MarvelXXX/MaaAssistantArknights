@@ -150,12 +150,31 @@ export function briefPlan(plan) {
     actionCount:plan.actions.length,actionsTruncated:plan.actions.length > 24,firstActions:plan.actions.slice(0,24)};
 }
 
-async function biliInfo(bv, part, signal) {
-  if (!/^BV[a-zA-Z0-9]{10}$/.test(bv) || !Number.isInteger(part) || part < 1 || part > 1000) throw new Error('BV 号或分 P 无效。');
+export async function biliInfo(bv, part, signal, stage) {
+  if (!/^BV[a-zA-Z0-9]{10}$/.test(bv) || (part != null && (!Number.isInteger(part) || part < 1 || part > 1000))) throw new Error('BV 号或分 P 无效。');
   const reply = await publicJson('https://api.bilibili.com/x/web-interface/view?bvid=' + bv,signal,biliHeaders);
-  const page = reply.data?.pages?.[part-1];
-  if (reply.code !== 0 || !page?.cid) throw new Error('无法读取该分 P 的公开视频，可选择本地文件。');
-  return {detail:reply.data,page};
+  const pages = reply.data?.pages;
+  if (reply.code !== 0 || !Array.isArray(pages) || !pages.length) throw new Error('无法读取公开视频分 P 目录。');
+  if (stage && pages.length > 1) {
+    const {row} = await stageAliases(stage);
+    const normalize = value => String(value || '').normalize('NFKC').toUpperCase().replace(/[‐‑‒–—]/g,'-').trim();
+    const code = normalize(row?.code || stage);
+    const matches = [];
+    for (const [index,page] of pages.entries()) {
+      const title = normalize(page.part);
+      if (title === code || (title.match(/[A-Z0-9]+(?:-[A-Z0-9]+)+/g) || []).includes(code)) matches.push(index+1);
+    }
+    if (part == null && matches.length === 1) part = matches[0];
+    if (part == null || (matches.length && !matches.includes(part))) {
+      const candidates = matches.length ? matches : pages.map((_,i)=>i+1);
+      const choices = candidates.slice(0,30).map(p=>'P'+p+' '+String(pages[p-1].part || '').slice(0,90));
+      throw new Error('请按 '+code+' 的分 P 目录核对后指定 part：'+choices.join('、'));
+    }
+  }
+  part ??= 1;
+  const page = pages[part-1];
+  if (!page?.cid) throw new Error('无法读取该分 P 的公开视频，可选择本地文件。');
+  return {detail:reply.data,page,part};
 }
 
 export async function openBiliMedia(bv, part, signal, range) {

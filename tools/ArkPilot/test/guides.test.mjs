@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from '../server.mjs';
-import { checkPlan, deploymentTarget, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from '../lib/guides.mjs';
+import { biliInfo, checkPlan, deploymentTarget, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from '../lib/guides.mjs';
 import { copilotDefeatReport, nativeAction, recognizedDefeat } from '../lib/maa.mjs';
 import { normalizeRoster, rosterFit } from '../lib/roster.mjs';
 import { runAgent, validateDecision } from '../lib/agent.mjs';
@@ -44,6 +44,20 @@ test('解析带清晰度的单段 MP4 并保留 Range，拒绝其他封装', asy
   assert.equal((await result.arrayBuffer()).byteLength,4);
   format='flv720';
   await assert.rejects(openBiliMedia('BV1123456789',1,getSignal()),/单段公开 MP4/);
+});
+
+test('按分 P 标题匹配完整关号，保留显式选段并提示同关的多个版本', async t => {
+  const pages = ['AS-S-1','AS-MO-10','攻略 AS－MO－1 普通'].map((part,i)=>({part,cid:i+1,duration:90}));
+  t.mock.method(globalThis,'fetch',async ()=>Response.json({code:0,data:{pages}}));
+  const lookup = (part,stage)=>biliInfo('BV0123456789',part,getSignal(),stage);
+  assert.equal((await lookup(undefined,'act35side_mo01')).part,3);
+  assert.equal((await lookup(1)).part,1);
+  assert.equal((await lookup()).part,1);
+  await assert.rejects(lookup(1,'AS-MO-1'),/P3/);
+  pages.push({part:'AS-MO-1 低配',cid:4,duration:120});
+  await assert.rejects(lookup(undefined,'AS-MO-1'),/P3.+P4/);
+  assert.equal((await lookup(4,'AS-MO-1')).page.cid,4);
+  await assert.rejects(lookup(undefined,'SL-7'),/P1 AS-S-1/);
 });
 
 test('作业必须包含有效的部署与编队，模型无权传入原生任务参数', () => {

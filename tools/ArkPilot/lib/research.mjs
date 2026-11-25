@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
-import { importGuide, openBiliMedia, publicJson, searchGuides } from './guides.mjs';
+import { biliInfo, openBiliMedia, publicJson, searchGuides } from './guides.mjs';
 import { ffmpegPath } from './maa.mjs';
 import { explainFrames } from './model.mjs';
 
@@ -83,11 +83,11 @@ export async function searchWeb(query,stage,signal) {
   return {results:[...unique.values()],unavailable};
 }
 
-export async function analyzeVideo(config,{bv,part,start,end},signal) {
+export async function analyzeVideo(config,{bv,part:requested,stage,start,end},signal,expectedStage) {
   if (!config.vision) throw new Error('解读视频画面需要在连接设置里启用视觉模型。');
+  const {part,page} = await biliInfo(bv,requested,signal,expectedStage || (requested == null ? stage : undefined));
   const url = 'https://www.bilibili.com/video/'+bv+'?p='+part;
-  const info = await importGuide(url,signal);
-  const duration = info.video.duration;
+  const duration = page.duration;
   start ??= 0;
   end = Math.min(end ?? duration,duration);
   if (!Number.isFinite(end) || end-start < 1 || start < 0) throw new Error('片段范围超出视频时长。');
@@ -109,7 +109,7 @@ export async function analyzeVideo(config,{bv,part,start,end},signal) {
       if (stdout.length) frames.push({seconds:time,image:'data:image/jpeg;base64,'+stdout.toString('base64')});
     }
     const {notes} = await explainFrames(config,frames,signal);
-    return {url,bv,part,start,end,duration,timestamps:frames.map(f=>f.seconds),notes};
+    return {url,bv,part,title:page.part,start,end,duration,timestamps:frames.map(f=>f.seconds),notes};
   } catch (err) {
     signal.throwIfAborted();
     if (err.code === 'ENOENT') throw new Error('未找到 FFmpeg，请设置 ARK_FFMPEG 或在攻略面板解读所选片段。');

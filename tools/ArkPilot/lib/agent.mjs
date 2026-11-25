@@ -41,11 +41,11 @@ export function validateDecision(reply, frame, readOnly, vision, maaAvailable = 
   if (a.type === 'read_wiki' && shortText(a.title) && (a.section == null || shortText(a.section,60))) {
     return {...decision,action:{type:a.type,title:a.title.trim(),section:a.section?.trim()}};
   }
-  if (a.type === 'analyze_video' && /^BV[a-zA-Z0-9]{10}$/.test(a.bv)) {
-    const part = integer(a.part ?? 1,1,1000);
+  if (a.type === 'analyze_video' && /^BV[a-zA-Z0-9]{10}$/.test(a.bv) && (a.stage == null || shortText(a.stage))) {
+    const part = a.part == null ? undefined : integer(a.part,1,1000);
     if ([a.start,a.end].some(n => n != null && (!Number.isFinite(n) || n < 0 || n > 86400)) ||
         (a.end != null && a.end <= (a.start ?? 0))) throw new Error('视频片段时间无效。');
-    return {...decision,action:{type:a.type,bv:a.bv,part,start:a.start,end:a.end}};
+    return {...decision,action:{type:a.type,bv:a.bv,part,stage:a.stage?.trim(),start:a.start,end:a.end}};
   }
   if (['find_guide','stage_rewards','chapter_rewards'].includes(a.type) && shortText(a.stage)) {
     return {...decision, action:{type:a.type,stage:a.stage.trim()}};

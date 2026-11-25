@@ -162,7 +162,7 @@ function actionName(a) {
     case 'load_guide': return '导入作业 #' + a.id;
     case 'search_web': return '联网搜索 · '+a.query;
     case 'read_wiki': return '阅读 PRTS Wiki · '+a.title;
-    case 'analyze_video': return '解读视频画面 · '+a.bv+' P'+a.part;
+    case 'analyze_video': return '解读视频画面 · '+a.bv+(a.part ? ' P'+a.part : a.stage ? ' · '+a.stage : '');
     case 'adapt_guide': return '按名册适配部署';
     case 'tap': return '点击 (' + a.x + ', ' + a.y + ')';
     case 'swipe': return '滑动 (' + a.x + ', ' + a.y + ') → (' + a.x2 + ', ' + a.y2 + ')';
