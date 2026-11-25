@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {nextRewardGuide, reconcileReward, selectRewardTarget, verifyWalletAccount} from '../lib/reward-queue.mjs';
-import {watchTutorialDialog} from '../lib/maa.mjs';
+import {watchBattlePause,watchTutorialDialog} from '../lib/maa.mjs';
 
 test('首通须有实机结论和对应余额变化，已通关不重复记账', () => {
   const t = {amount:200,currency:'orundum'};
@@ -64,6 +64,22 @@ test('固定队教学只在对白与击杀计数持续停滞时交回当前战�
   assert.equal(stalled('UseSkill',frame(2),90000),false);
   assert.equal(stalled('BattleAvatarDialog',frame(2),95000),false);
   assert.equal(stalled('BattleAvatarDialog',[],160000),false);
+});
+
+test('战斗长期暂停时只恢复一次，再次停滞时交回视觉',()=>{
+  const hud={label:'战斗防御点图标',source:'Maa'};
+  const text={label:'“ 暂停中一',source:'OCR',box:[723,464,154,33]};
+  const frame=(...anchors)=>({width:1600,height:900,anchors});
+  const watch=watchBattlePause();
+  assert.equal(watch(frame(text),0),undefined);
+  assert.equal(watch(frame(hud,{...text,box:[0,10,154,33]}),30000),undefined);
+  assert.equal(watch(frame(hud,text),40000),undefined);
+  assert.equal(watch(frame(hud,text),54999),undefined);
+  assert.equal(watch(frame(hud,text),55000),'resume');
+  assert.equal(watch(frame(hud,text),60000),undefined);
+  assert.equal(watch(frame(hud,text),70000),'stalled');
+  assert.equal(watch(frame(hud),80000),undefined);
+  assert.equal(watch(frame(hud,text),120000),undefined);
 });
 
 test('更正作业后可提前重试一次，余额待核和已完成均不能重开', () => {

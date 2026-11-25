@@ -12,7 +12,7 @@ import { chooseModel, listModels, explainFrames, proposeTeam } from './lib/model
 import { runAgent } from './lib/agent.mjs';
 import { chapterRewards, stageRewards } from './lib/rewards.mjs';
 import { briefPlan, checkPlan, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from './lib/guides.mjs';
-import { executeMaa, maaHome, nativeAction, recognizeRecording, scanRoster, watchTutorialDialog } from './lib/maa.mjs';
+import { executeMaa, maaHome, nativeAction, pausedBattleFrame, recognizeRecording, scanRoster, watchBattlePause, watchTutorialDialog } from './lib/maa.mjs';
 import { adaptGuide, assess, normalizeRoster } from './lib/roster.mjs';
 import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
 import { runRewardQueue } from './lib/reward-queue.mjs';
@@ -202,6 +202,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             const observer = new AbortController();
             const watching = AbortSignal.any([signal,observer.signal]);
             const stalled = fixedTeam ? watchTutorialDialog() : null;
+            const watchPause = afterStep ? watchBattlePause() : null;
             let phase = '';
             let timer;
             const updateFrame = async () => {
@@ -209,7 +210,16 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
                 const frame = await devicePreview(device, watching);
                 if (!watching.aborted) {
                   emit({type:'frame',...frame});
-                  if (stalled?.(phase,frame.anchors,Date.now())) {
+                  const pause = watchPause?.(frame,Date.now());
+                  if (pause==='resume') {
+                    const fresh = await devicePreview(device,watching);
+                    if (pausedBattleFrame(fresh)) {
+                      await device.input({type:'tap',x:Math.round(fresh.width*0.958),y:Math.round(fresh.height*0.075)},watching);
+                      emit({type:'core',text:'检测到战斗持续暂停，已点击继续，等待作业执行。'});
+                    }
+                  } else if (pause==='stalled') {
+                    observer.abort(new Error('战斗持续暂停。请核实右上角继续按钮并从同一局接手。'));
+                  } else if (stalled?.(phase,frame.anchors,Date.now())) {
                     observer.abort(new Error('教学停在同一击杀数和指引对白。当前战斗仍在进行；按高亮卡片与箭头用 deploy 完成指引，不要等待费用增长或重开。'));
                   }
                 }

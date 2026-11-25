@@ -54,6 +54,27 @@ export function watchTutorialDialog() {
   };
 }
 
+export function pausedBattleFrame({anchors,width,height}) {
+  return anchors.some(a=>a.source==='Maa' && a.label==='战斗防御点图标') && anchors.some(a=>{
+    if (a.source!=='OCR' || !a.box || !/暂停中|暫停中|PAUSE(?:D)?/i.test(a.label.replace(/\s/g,''))) return false;
+    const [x,y,w,h]=a.box;
+    return Math.abs((x+w/2)/width-0.5)<0.17 && Math.abs((y+h/2)/height-0.5)<0.12;
+  });
+}
+
+export function watchBattlePause() {
+  let since, sent;
+  return (frame,now)=>{
+    if (!pausedBattleFrame(frame)) { since=undefined; sent=false; return; }
+    since ??= now;
+    if (now-since<15000) return;
+    if (sent) return 'stalled';
+    since=now;
+    sent=true;
+    return 'resume';
+  };
+}
+
 async function workspace(fn) {
   const dir = await mkdtemp(path.join(tmpdir(), 'arkpilot-maa-'));
   try { return await fn(dir); }
