@@ -32,6 +32,14 @@ test('恢复时先核对中断项，避免把另一关的奖励记到旧账上',
   assert.equal(selectRewardTarget(targets,{items:{interrupted:{status:'进行中'}},opened:{}},0).id,'interrupted');
 });
 
+test('25 理智的剿灭等待期间可打 9 理智的关卡，恢复后可重试剿灭', () => {
+  const expensive={id:'camp',ap:25,requires:[]};
+  const cheap={id:'story',ap:9,requires:[]};
+  const ledger={items:{},opened:{},sanityCost:25,sanityWait:50};
+  assert.equal(selectRewardTarget([expensive,cheap],ledger,10),cheap);
+  assert.equal(selectRewardTarget([expensive,cheap],ledger,50),expensive);
+});
+
 test('登录认证失效会中断在途作业，即使工作进程随后报普通失败',async()=>{
   const options={signal:AbortSignal.timeout(3000),emit:()=>{}};
   await assert.rejects(runRewardStage(async({emit,signal})=>{
@@ -50,6 +58,10 @@ test('从实战记录和旧进度中跳过失败作业，保留按练度选择�
   const row={status:'未完成',note:'失败作业号：1002。',failedGuideIds:['1001']};
   assert.equal(nextRewardGuide(target), '1001');
   assert.equal(nextRewardGuide(target,row), '1003');
+  const mismatch={status:'未完成',note:'芬的技能低于要求，本轮未开战。',offeredGuideIds:['1001']};
+  assert.equal(nextRewardGuide(target,mismatch),'1002');
+  mismatch.status='理智不足';
+  assert.equal(nextRewardGuide(target,mismatch),'1001');
   assert.equal(nextRewardGuide({...target,retryGuideIds:[]},row), undefined);
   assert.equal(nextRewardGuide({...target,plan:{}},row), undefined);
 });

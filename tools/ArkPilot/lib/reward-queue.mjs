@@ -42,7 +42,9 @@ export function nextRewardGuide(target, row) {
   if (!row?.note) return target.guideId;
   if (!target.retryGuideIds?.length) return;
   const failed = failedGuides(row);
-  if (row.review) for (const id of row.offeredGuideIds || []) failed.add(id);
+  if (row.review || row.status === '未完成') {
+    for (const id of row.offeredGuideIds || []) failed.add(id);
+  }
   return [target.guideId,...target.retryGuideIds].find(id=>id && !failed.has(id));
 }
 
@@ -55,7 +57,7 @@ export function selectRewardTarget(targets, ledger, now) {
       (t.revision || 0) > (row.revision || 0);
     const revised = row?.status === '未完成' && row.review && nextRewardGuide(t,row);
     return !closed.has(row?.status) && (!row?.review || revised || corrected) && (!(row?.nextAt > now) || corrected) &&
-      !(t.ap > 0 && ledger.sanityWait > now) && !(t.crystal && ledger.crystalWait > now && !ledger.opened[t.chapter]) &&
+      !(t.ap >= (ledger.sanityCost || 1) && ledger.sanityWait > now) && !(t.crystal && ledger.crystalWait > now && !ledger.opened[t.chapter]) &&
       t.requires.every(id => closed.has(ledger.items[id]?.status));
   });
 }
@@ -270,10 +272,10 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       }
       if (guide && (!t.stage || !await matchesRewardStage(guide,t.stage))) throw new Error('预载作业与本项目标不符。');
       if (guide) emit({type:'guide_loaded',plan:guide,source:candidate ? 'PRTS #'+candidate : '本地 JSON'});
-      const loaded = guide ? '本项作业已经按真实关号核对并载入，直接用当前附件，无需再次检索或导入。' : '';
+      const loaded = guide ? '已按真实关号载入作业。优先用当前附件；如果名册、技能或练度不符，开战前可直接用 adapt_guide 换人，或用 find_guide 查找本关其他作业再 load_guide。若适配失败仍可换作业。' : '';
       const annihilation = t.stage?.startsWith('camp_') ? '本项核查剿灭数的一次性奖励。旧剿灭的剿灭战模拟也可打进度奖励。先在情报汇总核对档位、开启时间和开始行动按钮。周报酬已满或当前委托是另一张地图仍可打已开放的模拟。' : '';
       report = await play('本轮只处理 '+t.label+'。'+t.route+'。'+caution+previousNote+avoid+loaded+annihilation+
-        '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。'+spendRule,{
+        '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。若理智不足且画面可读，请写“理智不足，当前理智 X，关卡需 Y”。'+spendRule,{
           limit:75, expectedStage:t.stage, guide, guideId:guide ? candidate : undefined, onGuideStart:id=>{usedGuide=id;},
           resumeAfterStep:t.resumeAfterStep, allowNative:!credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
           onFrame:e=>{
@@ -306,7 +308,12 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     if (failed.size) row.failedGuideIds = [...failed];
     if (offered.size) row.offeredGuideIds = [...offered];
     if (closed.has(status)) ledger.opened[t.chapter] = true;
-    else if (status === '理智不足') ledger.sanityWait = row.nextAt = Date.now()+Math.max(10,t.ap||10)*6*minute;
+    else if (status === '理智不足') {
+      const observed = report.match(/^理智不足[，,:：\s]+当前理智\s*(\d{1,3})(?!\d)/);
+      ledger.sanityCost = t.ap || 1;
+      const missing = observed ? Math.max(1,ledger.sanityCost-Number(observed[1])) : 1;
+      ledger.sanityWait = row.nextAt = Date.now()+missing*6*minute;
+    }
     else if (status === '结晶不足') ledger.crystalWait = row.nextAt = Date.now()+24*60*minute;
     else if (status === '入口关闭') row.nextAt = Date.now()+24*60*minute;
     else if (status === '未完成' && attempts<3) row.nextAt = Date.now()+45*minute;
