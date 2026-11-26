@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { PNG } from 'pngjs';
 import { adaptGuide, assess, normalizeRoster, rosterFit } from '../lib/roster.mjs';
+import { roguelikePlacements } from '../lib/guides.mjs';
 import { searchWeb } from '../lib/research.mjs';
 import { decide } from '../lib/model.mjs';
 import { runAgent } from '../lib/agent.mjs';
@@ -208,4 +209,18 @@ test('首通自动编队传递缺位助战，普通指令和未开启自动编�
     assert.ok((await send(instruction,formation)).some(e=>e.type==='research_error' && /名册/.test(e.text)));
   }
   assert.equal(runs.length,1);
+});
+
+test('集成战略站位根据实机宽高投影，同地图的普通与紧急编号可以分别查询', async () => {
+  const result = await roguelikePlacements('苔手',{width:1600,height:900});
+  const support = result.placements.find(step=>step.groups.includes('辅助'));
+  assert.deepEqual(support,{groups:['辅助'],location:[4,2],direction:'left',terrain:'高台',dragTarget:[492,352]});
+  assert.deepEqual(await roguelikePlacements('ro3_e_1_3',{width:1600,height:900}), result);
+  for (const screen of [undefined,{width:800,height:600}]) {
+    const board = await roguelikePlacements('ro3_n_1_3',screen);
+    assert.equal(board.level,result.level);
+    assert.ok(board.placements.length>0 && board.placements.every(step=>!('dragTarget' in step)));
+  }
+  await assert.rejects(roguelikePlacements('1-7'),/集成战略/);
+  await assert.rejects(roguelikePlacements('../../Sami'),/集成战略/);
 });

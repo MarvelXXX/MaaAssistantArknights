@@ -186,6 +186,7 @@ function addStep(text) {
 function actionName(a) {
   switch (a.type) {
     case 'maa': return 'Maa · ' + a.task + (a.stage ? ' ' + a.stage : '') + (a.times ? ' × ' + a.times : '');
+    case 'roguelike_placements': return '查看 Maa 集成战略站位 · ' + a.stage;
     case 'find_guide': return '搜索 ' + a.stage + ' 作业';
     case 'stage_rewards': return '核对关卡奖励 · ' + a.stage;
     case 'chapter_rewards': return '核对章节奖励 · ' + a.stage;

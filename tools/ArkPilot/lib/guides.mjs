@@ -50,7 +50,7 @@ export async function stageAliases(query) {
   const row = rows.find(s => !s.stageId.includes('#')) || rows[0];
   const id = row?.stageId || text;
   const searchIds = [id, ...rows.filter(s => same(s.name) && !s.stageId.includes('#')).map(s => s.stageId)];
-  return {id, row, searchIds:[...new Set(searchIds)], aliases:[text, ...rows.flatMap(s => [s.stageId,s.code,s.name,s.levelId])].map(s => s.toLowerCase())};
+  return {id, row, matches:rows, searchIds:[...new Set(searchIds)], aliases:[text, ...rows.flatMap(s => [s.stageId,s.code,s.name,s.levelId])].map(s => s.toLowerCase())};
 }
 
 export async function stageBoard(stage) {
@@ -80,6 +80,10 @@ export async function deploymentTarget(stage, location, width, height) {
   const {row} = await stageAliases(stage);
   if (!row || Math.abs(width / height - 16 / 9) > 0.04) throw new Error('缺少本关的 16:9 部署地图。');
   const map = JSON.parse(await readFile(path.join(resource,'Arknights-Tile-Pos',row.filename),'utf8'));
+  return projectDeploymentTile(map,location,width,height);
+}
+
+function projectDeploymentTile(map,location,width,height) {
   const [col, line] = location;
   const tile = map.tiles[line]?.[col];
   if (!tile?.buildableType) throw new Error('所选格不可部署。');
@@ -96,6 +100,38 @@ export async function deploymentTarget(stage, location, width, height) {
   const point = {x:Math.round(width / 2 + rotatedX * scale),y:Math.round(height / 2 - rotatedY * scale)};
   if (point.x < 0 || point.x >= width || point.y < 0 || point.y >= height) throw new Error('部署格超出当前画面。');
   return point;
+}
+
+const rogueThemes = new Map([[1,'Phantom'],[2,'Mizuki'],[3,'Sami'],[4,'Sarkaz'],[5,'JieGarden'],[6,'BlackFlow']]);
+
+export async function roguelikePlacements(stage, screen = {}) {
+  const {row,matches} = await stageAliases(stage);
+  if (!row || !row.levelId.startsWith('obt/roguelike/')) throw new Error('未找到该集成战略节点，请核对关卡名称或编号。');
+  if (new Set(matches.map(item=>item.levelId)).size > 1) throw new Error('同名节点有多张地图，请提供准确的关卡编号。');
+  const theme = rogueThemes.get(Number(/^ro(\d+)_/.exec(row.stageId)?.[1]));
+  if (!theme || !row.name || /[\\/]/.test(row.name)) throw new Error('缺少该主题的 Maa 站位资料。');
+  const files = path.join(resource,'roguelike',theme,'autopilot');
+  let guide;
+  try { guide = JSON.parse(await readFile(path.join(files,row.name+'.json'),'utf8')); }
+  catch (error) { if (error.code!=='ENOENT') throw error; }
+  const map = JSON.parse(await readFile(path.join(resource,'Arknights-Tile-Pos',row.filename),'utf8'));
+  const {width,height} = screen;
+  const project = Number.isInteger(width) && Number.isInteger(height) && width>1 && height>1 && Math.abs(width/height-16/9)<=0.04;
+  const placements = [];
+  for (const step of guide?.deploy_plan || []) {
+    const {location,groups,direction} = step;
+    if (!Array.isArray(location) || !Array.isArray(groups)) continue;
+    const tile = map.tiles[location[1]]?.[location[0]];
+    if (!tile?.buildableType) continue;
+    const placement = {groups,location,direction,terrain:['','地面','高台','两用'][tile.buildableType]};
+    if (project) {
+      const point = projectDeploymentTile(map,location,width,height);
+      placement.dragTarget = [Math.round(point.x*1000/(width-1)),Math.round(point.y*1000/(height-1))];
+    }
+    placements.push(placement);
+  }
+  return {stage:row.name,level:row.levelId,theme,placements,
+    note:placements.length ? undefined : '该节点没有 Maa 常规部署建议。请点选干员，查看实机高亮的可部署格。'};
 }
 
 export async function publicJson(url, signal, headers = {}, maxBytes = 4 * 1024 * 1024) {

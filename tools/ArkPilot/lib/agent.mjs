@@ -5,7 +5,7 @@ import { decide } from './model.mjs';
 import { nativeAction } from './maa.mjs';
 
 const endTypes = new Set(['finish', 'ask', 'stop']);
-const researchTools = new Set(['find_guide','load_guide','adapt_guide','search_web','read_wiki','analyze_video','stage_rewards','chapter_rewards']);
+const researchTools = new Set(['find_guide','load_guide','adapt_guide','search_web','read_wiki','analyze_video','stage_rewards','chapter_rewards','roguelike_placements']);
 const noPremiumSpend = /(?:禁止|不得|不能|不可|不要|不许|不准|不|别)(?:再|额外)?(?:消耗|花费|使用|花|用|动用)[^，。；;\n]{0,16}(?:源石|合成玉)|(?:源石|合成玉)[^，。；;\n]{0,12}(?:不能|不可|不许|禁止)(?:花|用|消耗)|(?:do not|don't|never)\s+(?:use|spend)\s+(?:any\s+)?(?:originite|orundum)/iu;
 function premiumConfirmation(frame) {
   const labels = frame.anchors.map(anchor => anchor.label || '');
@@ -138,7 +138,7 @@ export function validateDecision(reply, frame, readOnly, vision, maaAvailable = 
         (a.end != null && a.end <= (a.start ?? 0))) throw new Error('视频片段时间无效。');
     return {...decision,action:{type:a.type,bv:a.bv,part,stage:a.stage?.trim(),start:a.start,end:a.end}};
   }
-  if (['find_guide','stage_rewards','chapter_rewards'].includes(a.type) && shortText(a.stage)) {
+  if (['find_guide','stage_rewards','chapter_rewards','roguelike_placements'].includes(a.type) && shortText(a.stage)) {
     return {...decision, action:{type:a.type,stage:a.stage.trim()}};
   }
   if (a.type === 'load_guide' && typeof a.id === 'string' && /^[1-9]\d{0,9}$/.test(a.id)) {
@@ -309,7 +309,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     emit({ type: 'decision', action, note, goal, turn });
     if (researchTools.has(action.type)) {
       let result;
-      try { result = await lookupGuide(action); }
+      try { result = await lookupGuide(action,{width:frame.width,height:frame.height}); }
       catch (err) { signal.throwIfAborted(); result = {error:err.message}; emit({type:'research_error',text:err.message}); }
       if (action.type === 'load_guide' && !result?.error) adaptation = null;
       if (action.type === 'adapt_guide') adaptation = result;
