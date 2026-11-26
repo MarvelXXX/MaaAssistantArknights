@@ -51,6 +51,28 @@ test('教学结算过渡中断后仅凭同关三星、首次掉落及两种货�
   assert.equal(evidence.best.preview,'complete');
 });
 
+test('悖论总结中断后用本关已完成的截图与独立余额核账', async () => {
+  const target={stage:'mem_fang_1',currency:'orundum',amount:200};
+  const before={prime:157,orundum:24278}, after={prime:157,orundum:24478};
+  const anchors=['悖论模拟','愉快合作','《 ． 已完成模拟作战'].map(label=>({source:'OCR',label}));
+  anchors.push({source:'Maa',label:'悖论模拟开始按钮'});
+  assert.equal((await rewardReceipt(target,before,after,anchors)).status,'首通已核');
+  for (const missing of anchors) {
+    assert.equal(await rewardReceipt(target,before,after,anchors.filter(a=>a!==missing)),undefined);
+  }
+  assert.equal(await rewardReceipt({...target,stage:'mem_falco_1'},before,after,anchors),undefined);
+  assert.equal(await rewardReceipt(target,before,{...after,prime:158},anchors),undefined);
+  assert.equal(await rewardReceipt(target,before,{...after,orundum:24678},anchors),undefined);
+  assert.equal(await rewardReceipt(target,before,before,anchors),undefined);
+  const evidence=rewardEvidence(target.stage,false,'愉快合作');
+  evidence.observe({type:'frame',preview:'battle',anchors:[{label:'战斗防御点图标'}]});
+  evidence.observe({type:'frame',preview:'stars',anchors:[{label:'结算三星标志'}]});
+  evidence.observe({type:'frame',preview:'cleared',anchors});
+  evidence.observe({type:'frame',preview:'overlay',anchors:[...anchors,{label:'公开招募'},{label:'采购中心'}]});
+  assert.equal(evidence.best.preview,'cleared');
+  assert.equal(evidence.best.kind,'result');
+});
+
 test('悖论凭证优先保留无遮挡结算，OCR漏读时仅保存战后关卡页', () => {
   const first = rewardEvidence('mem_ifrit_1');
   const frame = (preview, ...labels) => ({type:'frame',preview,anchors:labels.map(label=>({label}))});

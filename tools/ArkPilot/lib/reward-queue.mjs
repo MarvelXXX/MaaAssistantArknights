@@ -157,10 +157,25 @@ function receivedItem(anchors, name, amount) {
   });
 }
 
+function completedParadox(anchors, name) {
+  if (!name || !anchors.some(a=>a.source==='Maa' && a.label==='悖论模拟开始按钮')) return false;
+  const words = anchors.filter(a=>a.source==='OCR').map(a=>a.label.replace(/\s/g,''));
+  return words.includes('悖论模拟') && words.includes(name.replace(/\s/g,'')) &&
+    words.some(word=>word.replace(/^[\p{P}\p{S}]+/u,'')==='已完成模拟作战');
+}
+
 export async function rewardReceipt(target, before, after, anchors) {
   if (!target.claimAvailable) {
     if (await verifiedFirstDrop(target,before,after,anchors))
       return {status:'首通已核',note:'首通已核：本关结算截图的关号、关名、三星与首次掉落标记吻合，同一轮首页源石增加 1，合成玉持平。'};
+    if (target.stage?.startsWith('mem_') && target.currency==='orundum' && target.amount===200 &&
+        Number.isSafeInteger(before?.prime) && Number.isSafeInteger(before?.orundum) &&
+        after?.prime===before.prime && after.orundum===before.orundum+200) {
+      const {row} = await stageAliases(target.stage);
+      if (row?.stageId===target.stage && row.levelId.startsWith('obt/memory/') &&
+          completedParadox(anchors,row.name))
+        return {status:'首通已核',note:'首通已核：悖论模拟「'+row.name+'」的关卡页显示已完成模拟作战，同一轮首页合成玉增加 200，源石持平。'};
+    }
     return;
   }
   const words = anchors.filter(a=>a.source==='OCR').map(a=>({...a,label:a.label.replace(/\s/g,'')}));
@@ -262,7 +277,7 @@ export function renderProgress(manifest, ledger) {
   return lines.join('\n')+'\n';
 }
 
-export function rewardEvidence(stage, claimAvailable = false) {
+export function rewardEvidence(stage, claimAvailable = false, paradoxName) {
   let battleSeen = false, best;
   return {
     observe(event) {
@@ -274,6 +289,7 @@ export function rewardEvidence(stage, claimAvailable = false) {
       if (text.includes('公开招募') && /采购中心|干员寻访|档案/.test(text)) return;
       let score;
       if (claimAvailable && text.includes('获得物资') && /至纯源石|合成玉/.test(text)) score = 5;
+      else if (battleSeen && completedParadox(event.anchors,paradoxName)) score = 5;
       else if (text.includes('结算三星标志') && text.includes('首次掉落')) score = 4;
       else if (/获得物资|结算三星标志|结算二星标志|磨难结算标志|行动结束/.test(text)) score = 3;
       else if (text.includes('已完成模拟作战')) score = 2;
@@ -372,8 +388,9 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     (wallet.sanity == null ? '' : '，当前理智 '+wallet.sanity)+'。');
   for (const target of manifest.targets) {
     const row = ledger.items[target.id];
-    if (row?.status !== '余额待复核' || (!target.claimAvailable && (target.currency !== 'prime' || !target.stage))) continue;
-    const proof = path.join(dir,target.id+'-result.jpg');
+    if (row?.status !== '余额待复核' || (!target.claimAvailable && !target.stage)) continue;
+    const kind = row.evidence==='stage' ? 'stage' : 'result';
+    const proof = path.join(dir,target.id+'-'+kind+'.jpg');
     let verified;
     try {
       const {mtimeMs} = await stat(proof);
@@ -390,7 +407,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       signal.throwIfAborted();
       continue;
     }
-    Object.assign(row,verified,{evidence:'result'});
+    Object.assign(row,verified,{evidence:kind});
     delete row.review;
     ledger.opened[target.chapter] = true;
     await save();
@@ -429,7 +446,8 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     if (previous.at && previous.status !== '进行中') ledger.items[t.id].lastStatus = previous.status;
     await save();
     notify(t.label+'，第 '+attempts+' 次核查。');
-    const evidence = rewardEvidence(t.stage,t.claimAvailable);
+    const paradoxName = t.stage?.startsWith('mem_') ? (await stageAliases(t.stage)).row?.name : undefined;
+    const evidence = rewardEvidence(t.stage,t.claimAvailable,paradoxName);
     let report, usedGuide;
     const offered = new Set(previous.offeredGuideIds || []);
     const failed = failedGuides(previous);
