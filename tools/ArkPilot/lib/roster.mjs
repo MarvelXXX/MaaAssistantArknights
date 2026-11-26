@@ -102,7 +102,7 @@ export function rosterFit(plan,roster) {
 }
 
 export async function adaptGuide(plan,roster,notes,propose) {
-  checkPlan(plan);
+  plan = checkPlan(plan);
   const board = await stageBoard(plan.stage_name), layout = board?.tiles;
   const candidates = roster.operators.filter(o=>o.owned);
   const assessment = assess(plan,roster);

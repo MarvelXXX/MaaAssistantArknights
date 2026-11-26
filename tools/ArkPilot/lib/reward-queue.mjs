@@ -40,7 +40,7 @@ function validateManifest(manifest, serial) {
         !Array.isArray(t.requires) || (t.guideId && !/^[1-9]\d{0,9}$/.test(t.guideId))) throw new Error('首通清单包含无效或重复的目标。');
     if (t.retryGuideIds != null && (!Array.isArray(t.retryGuideIds) || t.retryGuideIds.length>20 ||
         t.retryGuideIds.some(id=>typeof id!=='string' || !/^[1-9]\d{0,9}$/.test(id)))) throw new Error('备选作业号无效。');
-    if (t.plan) checkPlan(t.plan);
+    if (t.plan) t.plan = checkPlan(t.plan);
     if (t.resumeAfterStep != null && (!t.fixedTeam || !t.stage || !Number.isInteger(t.resumeAfterStep) ||
         t.resumeAfterStep<1 || t.resumeAfterStep>=24)) throw new Error('教学续打需要固定队、关卡和有效的作业步骤。');
     if (t.revision != null && (!Number.isSafeInteger(t.revision) || t.revision<1)) throw new Error('攻略修订号无效。');
@@ -137,11 +137,13 @@ export async function verifiedFirstDrop(target, before, after, anchors) {
       !before || !after || !Number.isInteger(before.prime) || !Number.isInteger(before.orundum) ||
       after.prime !== before.prime+1 || after.orundum !== before.orundum) return false;
   const {row} = await stageAliases(target.stage);
-  if (!row?.code || !row.name || row.stageId !== target.stage || !target.label.includes(row.code+' 普通 ')) return false;
+  if (!row?.code || !row.name || row.stageId !== target.stage) return false;
+  const challenge = target.stage.endsWith('#f#');
+  if (!target.label.includes(row.code+(challenge ? ' 突袭／遭遇 ' : ' 普通 '))) return false;
   const norm = text => text.replace(/\s/g,'').toUpperCase();
   const words = new Set(anchors.filter(a=>a.source==='OCR').map(a=>norm(a.label)));
   return words.has(norm(row.code)) && words.has(norm(row.name)) && words.has('首次掉落') &&
-    anchors.some(a=>a.source==='Maa' && a.label==='结算三星标志');
+    anchors.some(a=>a.source==='Maa' && a.label===(challenge ? '磨难结算标志' : '结算三星标志'));
 }
 
 function receivedItem(anchors, name, amount) {
@@ -167,7 +169,7 @@ function completedParadox(anchors, name) {
 export async function rewardReceipt(target, before, after, anchors) {
   if (!target.claimAvailable) {
     if (await verifiedFirstDrop(target,before,after,anchors))
-      return {status:'首通已核',note:'首通已核：本关结算截图的关号、关名、三星与首次掉落标记吻合，同一轮首页源石增加 1，合成玉持平。'};
+      return {status:'首通已核',note:'首通已核：本关结算截图的关号、关名、难度对应的胜利标志与首次掉落标记吻合，同一轮首页源石增加 1，合成玉持平。'};
     if (target.stage?.startsWith('mem_') && target.currency==='orundum' && target.amount===200 &&
         Number.isSafeInteger(before?.prime) && Number.isSafeInteger(before?.orundum) &&
         after?.prime===before.prime && after.orundum===before.orundum+200) {
@@ -290,7 +292,7 @@ export function rewardEvidence(stage, claimAvailable = false, paradoxName) {
       let score;
       if (claimAvailable && text.includes('获得物资') && /至纯源石|合成玉/.test(text)) score = 5;
       else if (battleSeen && completedParadox(event.anchors,paradoxName)) score = 5;
-      else if (text.includes('结算三星标志') && text.includes('首次掉落')) score = 4;
+      else if (text.includes(stage?.endsWith('#f#') ? '磨难结算标志' : '结算三星标志') && text.includes('首次掉落')) score = 4;
       else if (/获得物资|结算三星标志|结算二星标志|磨难结算标志|行动结束/.test(text)) score = 3;
       else if (text.includes('已完成模拟作战')) score = 2;
       else if (battleSeen && stage?.startsWith('mem_') && /悖论模拟开始按钮|开始模拟/.test(text)) score = 1;

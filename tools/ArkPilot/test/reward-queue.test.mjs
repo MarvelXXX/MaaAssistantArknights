@@ -51,6 +51,23 @@ test('教学结算过渡中断后仅凭同关三星、首次掉落及两种货�
   assert.equal(evidence.best.preview,'complete');
 });
 
+test('突袭首次掉落只由同关突袭结算徽记、首次掉落及对应余额核销', async () => {
+  const target={stage:'act15d0_ex02#f#',label:'孤岛风云 MB-EX-2 突袭／遭遇 三面楚歌',currency:'prime',amount:1};
+  const before={prime:159,orundum:25878}, after={prime:160,orundum:25878};
+  const words=['MB-EX-2','三面楚歌','首次掉落'].map(label=>({source:'OCR',label}));
+  const badge={source:'Maa',label:'磨难结算标志'};
+  const anchors=[...words,badge];
+  assert.equal((await rewardReceipt(target,before,after,anchors)).status,'首通已核');
+  assert.equal(await rewardReceipt(target,before,after,[...words,{...badge,label:'结算三星标志'}]),undefined);
+  assert.equal(await rewardReceipt({...target,stage:'act15d0_ex02'},before,after,anchors),undefined);
+  assert.equal(await rewardReceipt(target,before,after,anchors.filter(a=>a.label!=='首次掉落')),undefined);
+  assert.equal(await rewardReceipt(target,before,{...after,orundum:26078},anchors),undefined);
+  const evidence=rewardEvidence(target.stage);
+  evidence.observe({type:'frame',preview:'first',anchors:[badge]});
+  evidence.observe({type:'frame',preview:'receipt',anchors});
+  assert.equal(evidence.best.preview,'receipt');
+});
+
 test('悖论总结中断后用本关已完成的截图与独立余额核账', async () => {
   const target={stage:'mem_fang_1',currency:'orundum',amount:200};
   const before={prime:157,orundum:24278}, after={prime:157,orundum:24478};

@@ -21,16 +21,22 @@ export function checkPlan(plan) {
       (plan.groups != null && (!Array.isArray(plan.groups) || !plan.groups.every(g => isOp(g) && Array.isArray(g.opers) && g.opers.every(isOp)))) ||
       (plan.doc?.details != null && typeof plan.doc.details !== 'string') ||
       (plan.doc?.title != null && typeof plan.doc.title !== 'string')) throw new Error('作业编队或说明格式有误。');
+  let normalizedActions;
   for (const [i, a] of plan.actions.entries()) {
     const type = a?.type ?? 'Deploy';
     if (!a || typeof a !== 'object' || !actionTypes.has(type)) throw new Error('第 ' + (i+1) + ' 步动作不受支持。');
     if (['Deploy','部署'].includes(type) && (typeof a.name !== 'string' || !a.name.trim() ||
         !Array.isArray(a.location) || a.location.length !== 2 || !a.location.every(n => Number.isInteger(n) && n >= 0) ||
-        !['Left','Right','Up','Down','None','左','右','上','下','无'].includes(a.direction))) {
+        (a.direction !== undefined && !['Left','Right','Up','Down','None','左','右','上','下','无'].includes(a.direction)))) {
       throw new Error('第 ' + (i+1) + ' 步部署缺少干员、棋盘坐标或朝向。');
     }
+    if (['Deploy','部署'].includes(type) && a.direction === undefined) {
+      // CopilotConfig uses Right when a deployment omits its facing.
+      normalizedActions ??= plan.actions.slice();
+      normalizedActions[i] = {...a,direction:'Right'};
+    }
   }
-  return plan;
+  return normalizedActions ? {...plan,actions:normalizedActions} : plan;
 }
 
 let overview;

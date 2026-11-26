@@ -106,6 +106,10 @@ test('悖论列表导航使用空编队作业注明的手选技能', async () =>
 
 test('作业必须包含有效的部署与编队，模型无权传入原生任务参数', () => {
   assert.equal(checkPlan(plan),plan);
+  const mine = {type:'部署',name:'干扰地雷',location:[1,2]};
+  assert.equal(checkPlan({...plan,actions:[mine]}).actions[0].direction,'Right');
+  assert.equal(mine.direction,undefined);
+  assert.throws(()=>checkPlan({...plan,actions:[{...mine,direction:'南'}]}),/朝向/);
   assert.throws(() => checkPlan({...plan,groups:[{name:'先锋'}]}),/编队/);
   assert.throws(() => checkPlan({...plan,actions:[{type:'Deploy',name:'令'}]}),/部署/);
   assert.throws(() => nativeAction({task:'Custom'},true));
