@@ -268,7 +268,7 @@ export async function paradoxNavigationPlan(plan, stage, selectedSkill) {
   return {...plan,opers:[{name:owner.name,skill}]};
 }
 
-export async function executeMaa(action, { home, device, serial, guide, formation, borrowSupport, signal, progress, prepare = false, afterStep }) {
+export async function executeMaa(action, { home, device, serial, guide, formation, borrowSupport, practiceOnly = false, signal, progress, prepare = false, afterStep }) {
   const a = nativeAction(action, !!guide);
   return workspace(async work => {
     let params, stageTask;
@@ -323,6 +323,14 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
         params = a.task === 'ParadoxCopilot' ? {list:[filename]} : {filename};
       } else {
         params = {filename, formation:formation === true, loop_times:1, use_sanity_potion:false};
+        if (practiceOnly) {
+          const tasks = path.join(work,'overlay','resource','tasks');
+          await mkdir(tasks,{recursive:true});
+          await writeFile(path.join(tasks,'arkpilot-practice.json'),JSON.stringify({
+            BattleStartPre:{algorithm:'JustReturn',action:'DoNothing',next:[]},
+            BattleStartAll:{next:['BattleStartExercise']},
+          }));
+        }
         if (params.formation && borrowSupport === true) params.support_unit_usage = 1;
       }
     }

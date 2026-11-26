@@ -13,6 +13,7 @@ const labels = {
   GameStart: '启动页 START',
   Home: '主界面设置入口', StartToWakeUp: '点击开始', ReceiveAward: '领取任务奖励',
   WeeklyTask: '周常任务标签', ReceiveMail: '领取邮件附件', StartButton2: '编队页开始行动',
+  BattleStartExercise: '演习编队页 PLAN 开始行动',
   'StageDrops-Stars-3': '结算三星标志', 'StageDrops-Stars-2': '结算二星标志',
   'StageDrops-Stars-Adverse': '磨难结算标志', UseStone: '源石恢复提示',
   OperOpenInformationMenu: '干员档案入口', OperOpenParadox: '档案中的悖论模拟入口',
@@ -70,12 +71,13 @@ async function loadTemplates() {
   const templates = [];
   for (const [task, label] of Object.entries(labels)) {
     const spec = tasks[task];
+    const roi = spec?.roi ?? tasks[spec?.baseTask]?.roi;
     // The START icon has a black background in both the template and its on-screen ROI.
-    if (!spec?.roi || (spec.maskRange && task !== 'GameStart')) continue;
+    if (!roi || (spec.maskRange && task !== 'GameStart')) continue;
     for (const file of [spec.template || task + '.png'].flat()) {
       if (!files.has(file)) continue;
       const mat = grayMat(pixels(await readFile(files.get(file))));
-      templates.push({ task, label, mat, roi: spec.roi, threshold: Math.max(0.84, spec.templThreshold || 0) });
+      templates.push({ task, label, mat, roi, threshold: Math.max(0.84, spec.templThreshold || 0) });
     }
   }
   return templates;
@@ -109,6 +111,11 @@ async function matchTemplates(image, client) {
     }
   } finally { gray.delete(); reference.delete(); }
   return { anchors: [...hits.values()], status: 'Maa 模板已加载' };
+}
+
+export function isPracticeFormation(frame) {
+  return frame.anchors.some(a=>a.source==='Maa' && a.label==='演习编队页 PLAN 开始行动') ||
+    frame.anchors.some(a=>a.source==='OCR' && /\bPLAN\b/i.test(a.label) && a.box?.[0]>frame.width*0.76 && a.box[1]>frame.height*0.50);
 }
 
 function readText(frame, signal) {

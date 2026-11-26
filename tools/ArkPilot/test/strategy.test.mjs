@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { readFile } from 'node:fs/promises';
 import { PNG } from 'pngjs';
 import { adaptGuide, assess, normalizeRoster, rosterFit } from '../lib/roster.mjs';
 import { roguelikePlacements } from '../lib/guides.mjs';
 import { searchWeb } from '../lib/research.mjs';
 import { decide } from '../lib/model.mjs';
-import { runAgent } from '../lib/agent.mjs';
+import { requestsPracticeOnly, runAgent } from '../lib/agent.mjs';
 import { createServer } from '../server.mjs';
 import { mergeRosterScan } from '../public/guides.js';
 
@@ -217,6 +218,41 @@ test('首通自动编队传递缺位助战，普通指令和未开启自动编�
     assert.ok((await send(instruction,formation)).some(e=>e.type==='research_error' && /名册/.test(e.text)));
   }
   assert.equal(runs.length,1);
+});
+
+test('演习作业交接时重读当帧 PLAN，退出编队后不会从详情开始正式作战',async t=>{
+  assert.equal(requestsPracticeOnly('只用一张免费演习券重试，正式三星首通另算'),true);
+  assert.equal(requestsPracticeOnly('先演习，随后正式作战'),false);
+  assert.equal(requestsPracticeOnly('无需再次演习，开始正式作战'),false);
+  const template = PNG.sync.read(await readFile(new URL('../../../resource/template/Battle/StartButton/BattleStartExercise.png',import.meta.url)));
+  const canvas = new PNG({width:1280,height:720});
+  const detail = PNG.sync.write(canvas);
+  PNG.bitblt(template,canvas,0,0,template.width,template.height,1030,360);
+  const rehearsal = PNG.sync.write(canvas);
+  let frames, turn;
+  const calls=[];
+  const model=await listen(http.createServer(async(req,res)=>{
+    for await(const _ of req) {}
+    const action=turn++===0 ? {type:'maa',task:'Copilot'} : {type:'finish'};
+    res.setHeader('Content-Type','application/json');
+    res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({intent:'operate',goal:'演习',note:'检查交接',action})}}]}));
+  }),t);
+  const app=await listen(createServer({getHome:async()=>'fixture',getDevice:async()=>({
+    capture:async()=>({png:frames.length>1?frames.shift():frames[0],width:1280,height:720,client:'com.hypergryph.arknights'}),
+  }),native:async(_,options)=>{calls.push(options.practiceOnly);}}),t);
+  const run=async images=>{
+    turn=0;
+    frames=images;
+    const response=await fetch(app+'/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      guide:author,provider:'api',apiOptIn:true,url:model,model:'fixture',vision:false,instruction:'只演习一次',
+    })});
+    return (await response.text()).trim().split('\n').map(JSON.parse);
+  };
+  const rejected=await run([rehearsal,detail]);
+  assert.ok(rejected.some(e=>e.type==='research_error' && /PLAN/.test(e.text)));
+  assert.deepEqual(calls,[]);
+  await run([rehearsal]);
+  assert.deepEqual(calls,[true]);
 });
 
 test('集成战略站位根据实机宽高投影，同地图的普通与紧急编号可以分别查询', async () => {
