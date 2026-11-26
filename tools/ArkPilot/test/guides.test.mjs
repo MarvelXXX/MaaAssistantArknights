@@ -46,6 +46,35 @@ test('解析带清晰度的单段 MP4 并保留 Range，拒绝其他封装', asy
   await assert.rejects(openBiliMedia('BV1123456789',1,getSignal()),/单段公开 MP4/);
 });
 
+test('视频范围请求可跟随一次可信 CDN 跳转，并在请求未知目标前停止', async t => {
+  const cdn='0123456789abcdef0123456789abcdef.v.smtcdns.com';
+  let destination='https://'+cdn+'/video.mp4';
+  let followed=0;
+  t.mock.method(globalThis,'fetch',async (url,options)=>{
+    const u=new URL(url);
+    if (u.pathname.endsWith('/view')) return Response.json({code:0,data:{pages:[{cid:3}]}});
+    if (u.pathname.endsWith('/playurl')) return Response.json({code:0,data:{format:'mp4720',durl:[{url:'https://test.bilivideo.com/video',size:40}]}});
+    assert.equal(options.headers.Range,'bytes=4-7');
+    if (u.hostname==='test.bilivideo.com') {
+      assert.equal(options.redirect,'manual');
+      return new Response(null,{status:302,headers:{location:destination}});
+    }
+    assert.equal(u.hostname,cdn);
+    assert.equal(options.redirect,'error');
+    followed++;
+    return new Response(new Uint8Array(4),{status:206,headers:{'content-range':'bytes 4-7/40'}});
+  });
+  const read=()=>openBiliMedia('BV2123456789',1,getSignal(),'bytes=4-7');
+  const result=await read();
+  assert.equal(result.status,206);
+  assert.equal(result.headers.get('content-range'),'bytes 4-7/40');
+  assert.equal((await result.arrayBuffer()).byteLength,4);
+  for (destination of ['http://'+cdn+'/video','https://'+cdn+':5443/video','https://127.0.0.1/video','https://'+cdn+'.example.com/video']) {
+    await assert.rejects(read(),/不支持的媒体跳转/);
+  }
+  assert.equal(followed,1);
+});
+
 test('按分 P 标题匹配完整关号，保留显式选段并提示同关的多个版本', async t => {
   const pages = ['AS-S-1','AS-MO-10','攻略 AS－MO－1 普通'].map((part,i)=>({part,cid:i+1,duration:90}));
   t.mock.method(globalThis,'fetch',async ()=>Response.json({code:0,data:{pages}}));

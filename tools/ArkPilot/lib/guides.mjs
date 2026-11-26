@@ -193,13 +193,25 @@ export async function openBiliMedia(bv, part, signal, range) {
       throw new Error('该视频未提供可读取的单段公开 MP4，或超过 1 GiB。可选择本地录像。');
     }
     const cdn = new URL(file.url);
-    if (cdn.protocol !== 'https:' || cdn.username || cdn.password || !/(^|\.)bilivideo\.(com|cn)$/.test(cdn.hostname)) {
+    if (cdn.protocol !== 'https:' || cdn.port || cdn.username || cdn.password || !/(^|\.)bilivideo\.(com|cn)$/.test(cdn.hostname)) {
       throw new Error('此播放源暂不支持，请选择本地录像。');
     }
     if (streamCache.size >= 16) streamCache.delete(streamCache.keys().next().value);
     entry = {url:cdn.href,until:Date.now()+120000}; streamCache.set(key,entry);
   }
-  const response = await fetch(entry.url,{headers:{...biliHeaders,...(range ? {Range:range} : {})},signal,redirect:'error'});
+  const headers = {...biliHeaders,...(range ? {Range:range} : {})};
+  let response = await fetch(entry.url,{headers,signal,redirect:'manual'});
+  if ([301,302,303,307,308].includes(response.status)) {
+    const location = response.headers.get('location');
+    await response.body?.cancel();
+    const next = location && URL.parse(location,entry.url);
+    if (!next || next.protocol !== 'https:' || next.port || next.username || next.password ||
+        !(/(^|\.)bilivideo\.(com|cn)$/.test(next.hostname) || /^[a-f0-9]{32}\.v\.smtcdns\.com$/.test(next.hostname))) {
+      streamCache.delete(key);
+      throw new Error('视频平台返回了不支持的媒体跳转。');
+    }
+    response = await fetch(next,{headers,signal,redirect:'error'});
+  }
   if (!response.ok || !response.body || Number(response.headers.get('content-length')) > 1024**3) {
     await response.body?.cancel(); streamCache.delete(key); throw new Error('视频平台未提供可读的公开媒体流，请使用本地文件。');
   }
