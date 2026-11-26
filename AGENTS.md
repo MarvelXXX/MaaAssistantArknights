@@ -1,6 +1,6 @@
 # MAA 开发约定
 
-本仓库以 `main` 为集成分支。每个新功能从最新的 `origin/main` 创建独立的 `feat/<功能名>` 分支，开发完成后向本仓库的 `main` 提交 Pull Request。
+本仓库以 `main` 为集成分支。每次开始新功能前，先获取本仓库的 `origin/main` 和原仓库 `MaaAssistantArknights/MaaAssistantArknights` 的默认分支。若上游有尚未合入的提交，先在独立工作区验证合并结果，保留 ArkPilot 的改动，通过同步 Pull Request 合入本仓库的 `main`。然后从最新的 `origin/main` 创建独立的 `feat/<功能名>` 分支，开发完成后向本仓库的 `main` 提交 Pull Request。
 
 格式由 `.pre-commit-config.yaml` 钩子机器强制，各钩子按 files / types 限定范围；本地不处理好的话 GitHub CI 会定时代跑并生成额外的机器修复 commit，为避免此副作用，改完文件后须本地跑对应格式化（如 C++ 的 clang-formatter）。
 
