@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dismissStoneRecovery, exchangeItemReceipt, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, rewardWalletContext, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForRewardManifest, waitForWalletModel} from '../lib/reward-queue.mjs';
+import {dismissStoneRecovery, exchangeItemReceipt, isRewardHome, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, rewardWalletContext, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForRewardManifest, waitForWalletModel} from '../lib/reward-queue.mjs';
+
+test('核账时区分快捷导航和显示理智的真实首页',()=>{
+  const ocr=(...labels)=>labels.map(label=>({source:'OCR',label}));
+  const home={source:'Maa',label:'主界面设置入口'};
+  const menu=ocr('终端','首页','发电站','干员','基建','公开招募','干员寻访采购中心');
+  assert.equal(isRewardHome({anchors:[...menu,home]}),false);
+  assert.equal(isRewardHome({anchors:menu.filter(a=>a.label!=='首页')}),false);
+  assert.equal(isRewardHome({anchors:ocr('理智 / 210','角色管理','公开招募')}),true);
+  assert.equal(isRewardHome({anchors:[home]}),true);
+});
 
 test('等待自然理智期间更新清单可提前唤醒，不会一直等到理智回满',async()=>{
   const pauses=[];
