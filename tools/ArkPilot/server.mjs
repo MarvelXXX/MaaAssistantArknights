@@ -107,7 +107,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'");
     const controller = new AbortController();
     res.once('close', () => { if (!res.writableEnded) controller.abort(); });
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30 * 60 * 1000)]);
+    let signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30 * 60 * 1000)]);
     try {
       if (req.method === 'GET' && staticFiles.has(req.url)) {
         const [name, type] = staticFiles.get(req.url);
@@ -391,8 +391,9 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home && allowNative ? runNative : null });
         }
         if (queue) {
+          signal = job ? job.controller.signal : controller.signal;
           await runQueue({filename:queueFile, serial:data.serial,
-            device, config, runCommand, emit, signal:job ? job.controller.signal : controller.signal});
+            device, config, runCommand, emit, signal});
         } else {
           await runCommand({instruction, signal, emit, history:historyFrom(data.history), guide:attachedGuide, limit});
         }

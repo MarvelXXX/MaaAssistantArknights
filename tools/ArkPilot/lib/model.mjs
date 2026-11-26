@@ -87,13 +87,17 @@ async function request(config, operation, payload, signal) {
       return await result.json();
     } catch (error) {
       signal?.throwIfAborted();
-      if (timeout.aborted) throw new Error('模型响应超时，请重试。');
+      if (timeout.aborted) throw Object.assign(new Error('模型响应超时，请重试。'), {code:'MODEL_TEMPORARY'});
       const transient = [408,502,503,504].includes(error.status) || error instanceof SyntaxError ||
-        ['ECONNRESET','EPIPE','EAI_AGAIN','ETIMEDOUT','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_HEADERS_TIMEOUT'].includes(error.cause?.code);
+        ['ECONNRESET','ECONNREFUSED','ENETUNREACH','EHOSTUNREACH','EPIPE','EAI_AGAIN','ETIMEDOUT','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_HEADERS_TIMEOUT'].includes(error.cause?.code);
       if (!transient || attempt > 0) {
-        if (error.status) throw error;
-        if (error instanceof SyntaxError) throw new Error('模型接口返回了无效或不完整的 JSON 响应。');
-        throw new Error('无法读取模型响应。请检查服务地址及 OpenAI 兼容接口。');
+        if (error.status) {
+          if (transient) error.code = 'MODEL_TEMPORARY';
+          throw error;
+        }
+        const message = error instanceof SyntaxError ? '模型接口返回了无效或不完整的 JSON 响应。' :
+          '无法读取模型响应。请检查服务地址及 OpenAI 兼容接口。';
+        throw Object.assign(new Error(message, {cause:error}), {code:transient ? 'MODEL_TEMPORARY' : 'MODEL_CONNECTION'});
       }
       await delay(650, undefined, { signal: combined });
     }

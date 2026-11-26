@@ -1,8 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateDecision } from '../lib/agent.mjs';
-import { decide } from '../lib/model.mjs';
+import { decide, listModels } from '../lib/model.mjs';
 import { matchChapterRewards, matchRewards, matchSimulations } from '../lib/rewards.mjs';
+
+test('模型服务暂时不可用与无效凭据分别上报给首页读数重试',async t=>{
+  const cfg={url:'http://test.invalid/v1'}, signal=AbortSignal.timeout(5000);
+  let status=503, requests=0;
+  t.mock.method(globalThis,'fetch',async()=>{requests++;return new Response(null,{status});});
+  await assert.rejects(listModels(cfg,signal),e=>e.status===503 && e.code==='MODEL_TEMPORARY');
+  assert.equal(requests,2);
+  status=401;
+  await assert.rejects(listModels(cfg,signal),e=>e.status===401 && e.code!=='MODEL_TEMPORARY');
+  assert.equal(requests,3);
+});
 
 test('兼容接口拒绝原生函数时，JSON规划仍能看到最新的章节查询及参数',async t=>{
   const config={url:'http://localhost/v1',model:'test',vision:false};

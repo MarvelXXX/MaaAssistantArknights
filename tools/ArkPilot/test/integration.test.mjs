@@ -58,6 +58,24 @@ test('后台首通在网页断开后保持唯一运行，新网页接收进度�
   assert.equal((await health()).active,false);
   assert.equal((await post('reward-queue/attach',{id:queue.id})).status,409);
 });
+test('前台清单超过普通指令时限时仍返回实际错误',async t=>{
+  const setupTimer=new AbortController(), normalTimeout=AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal,'timeout',ms=>ms===30*60*1000 ? setupTimer.signal : normalTimeout(ms));
+  const oldFile=process.env.ARK_REWARD_QUEUE;
+  process.env.ARK_REWARD_QUEUE='test-reward-manifest.json';
+  t.after(()=>{ if (oldFile===undefined) delete process.env.ARK_REWARD_QUEUE; else process.env.ARK_REWARD_QUEUE=oldFile; });
+  const app=await listen(createServer({getDevice:async()=>({}),getHome:async()=>null,
+    runQueue:async({signal})=>{
+      setupTimer.abort();
+      assert.equal(signal.aborted,false);
+      throw new Error('模型服务返回 HTTP 503。');
+    }}),t);
+  const res=await fetch(app+'/api/run',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({instruction:'/首通清单',serial:'device',url:'http://example.invalid/v1',model:'test'})});
+  const events=(await res.text()).trim().split('\n').map(line=>JSON.parse(line));
+  assert.deepEqual(events.at(-1),{type:'error',text:'模型服务返回 HTTP 503。'});
+});
+
 test('HTTP 对话经兼容模型返回点击，重新截图确认，并支持纯文本追问', async t => {
   const screens = [makeFrame(120, 0), makeFrame(0, 120)];
   let scene = 0;

@@ -1,7 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dismissStoneRecovery, nextRewardGuide, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
+import {dismissStoneRecovery, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
 import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
+
+test('余额读取遇到临时断连时重新截图，错误凭据、离开首页和主动停止立即返回',async()=>{
+  const controller=new AbortController(), waits=[];
+  const pause=async ms=>{waits.push(ms);};
+  const wallet={prime:160,orundum:26278};
+  const temporary=Object.assign(new Error('模型暂时不可用'),{code:'MODEL_TEMPORARY'});
+  const unreadable=Object.assign(new Error('首页数字模糊'),{code:'WALLET_UNREADABLE'});
+  const captures=[temporary,unreadable,wallet];
+  const read=async()=>{const result=captures.shift(); if (result instanceof Error) throw result; return result;};
+  assert.deepEqual(await readWalletWithRetry(read,controller.signal,()=>{},pause),wallet);
+  assert.deepEqual(waits,[10000,1000]);
+  for (const error of [Object.assign(new Error('HTTP 401'),{status:401}),Object.assign(new Error(),{code:'NOT_HOME'}),Object.assign(new Error(),{code:'STONE_RECOVERY'})]) {
+    await assert.rejects(readWalletWithRetry(async()=>{throw error;},controller.signal,()=>{},pause),e=>e===error);
+  }
+  assert.equal(waits.length,2);
+  let count=0;
+  const offline=async()=>{count++;throw temporary;};
+  await assert.rejects(readWalletWithRetry(offline,controller.signal,()=>{},pause),e=>e===temporary);
+  assert.equal(count,3);
+  assert.deepEqual(waits.slice(-2),[10000,30000]);
+  await assert.rejects(readWalletWithRetry(offline,controller.signal,()=>{},async()=>controller.abort()),{name:'AbortError'});
+  assert.equal(count,4);
+});
 
 test('重试记录按上次结算状态展示旧截图，并兼容缺少上次状态的存档',()=>{
   const manifest={targets:[{id:'stage',label:'SL-MO-1'}]};

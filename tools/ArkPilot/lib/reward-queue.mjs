@@ -224,7 +224,7 @@ async function captureWallet(device, config, signal) {
     const home = frame.anchors.some(a=>a.source==='Maa' && a.label==='主界面设置入口') ||
       /干员|角色管理/.test(labels) && /基建|终端|采购中心/.test(labels);
     if (home) break;
-    if (attempt === 2) throw new Error('当前截图不是可核对余额的首页。');
+    if (attempt === 2) throw Object.assign(new Error('当前截图不是可核对余额的首页。'), {code:'NOT_HOME'});
     await delay(650,undefined,{signal});
   }
   const observedAt = Date.now();
@@ -233,9 +233,23 @@ async function captureWallet(device, config, signal) {
     readOnly:true, turn:1, recentSteps:[], conversation:[], remainingActions:0,
   }, {...frame,preview:balanceDetail(frame.image),anchors:[]}, signal);
   const m = /^余额\s+(\d{1,7})\s+(\d{1,9})\s+(\d{5,14})(?:\s+(\d{1,3}|\?))?$/.exec(reply.note?.trim());
-  if (!m || reply.action?.type !== 'finish') throw new Error('未读到两种首页余额。');
+  if (!m || reply.action?.type !== 'finish') throw Object.assign(new Error('未读到两种首页余额。'), {code:'WALLET_UNREADABLE'});
   return {prime:Number(m[1]), orundum:Number(m[2]), uid:m[3], sanity:m[4] && m[4]!=='?' ? Number(m[4]) : undefined,
     observedAt, image:frame.preview};
+}
+
+export async function readWalletWithRetry(capture, signal, notify, pause = delay) {
+  for (let attempt=0; ; attempt++) {
+    signal.throwIfAborted();
+    try { return await capture(); }
+    catch (error) {
+      signal.throwIfAborted();
+      if (!['MODEL_TEMPORARY','WALLET_UNREADABLE'].includes(error.code) || attempt>=2) throw error;
+      const seconds = error.code==='MODEL_TEMPORARY' ? [10,30][attempt] : 1;
+      notify(error.message+' '+seconds+' 秒后重新截图核对首页余额。');
+      await pause(seconds*1000,undefined,{signal});
+    }
+  }
 }
 
 export async function verifyWalletAccount(capture, uid) {
@@ -367,11 +381,12 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     return result?.note?.trim() || '未完成';
   };
   const homeWallet = async observe => {
-    const read = ()=>verifyWalletAccount(()=>captureWallet(device,config,signal),manifest.uid);
+    const capture = ()=>readWalletWithRetry(()=>captureWallet(device,config,signal),signal,notify);
+    const read = ()=>verifyWalletAccount(capture,manifest.uid);
     try { return await read(); }
     catch (error) {
       signal.throwIfAborted();
-      if (error.message.includes('UID')) throw error;
+      if (error.code!=='NOT_HOME' && error.code!=='STONE_RECOVERY') throw error;
       let instruction = '回到当前游戏账号的首页，若有结算请先观察再退出，有未结束的实战等到结算。认证失效可确认后使用设备记住的原账号快捷登录。若要求短信、扫码、密码或提示其他设备在线，停在该页并 ask。停在首页，不领取其他奖励。'+spendRule;
       if (error.code==='STONE_RECOVERY') {
         await dismissStoneRecovery(device,signal);
