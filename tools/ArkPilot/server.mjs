@@ -310,7 +310,8 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             return;
           }
           emit({ type: 'model', model: config.model });
-          const guidance = {notes:!queue && typeof data.notes === 'string' ? data.notes.slice(0,6000) : '',plan:briefPlan(guide),
+          const guidance = {get formation() { return formation; },
+            notes:!queue && typeof data.notes === 'string' ? data.notes.slice(0,6000) : '',plan:briefPlan(guide),
             roster:roster && {complete:roster.complete,operators:roster.operators.map(
               ({name,owned,role,elite,level,skill_level,skill_levels,potential,module,module_level})=>
                 ({name,owned,role,elite,level,skill_level,skill_levels,potential,module,module_level}))}};

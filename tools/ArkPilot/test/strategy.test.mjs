@@ -142,10 +142,15 @@ test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无�
   const decision = a => ({intent:'operate',goal:'按我的干员适配',note:'核对编队',action:{type:a,...(a==='maa'?{task:'Copilot'}:{})}});
   let actions = ['adapt_guide','maa','finish'];
   let observedRoster;
+  const formationStates=[];
   const model = await listen(http.createServer(async(req,res)=>{
     let body=''; for await (const part of req) body+=part;
     const msgs=JSON.parse(body).messages;
-    if (!observedRoster && !msgs[0].content.includes('每位一人')) observedRoster=JSON.parse(msgs[1].content).guidance.roster;
+    if (!msgs[0].content.includes('每位一人')) {
+      const guidance=JSON.parse(msgs[1].content).guidance;
+      observedRoster ??= guidance.roster;
+      formationStates.push(guidance.formation);
+    }
     const result = msgs[0].content.includes('每位一人') ? proposal : decision(actions.shift());
     res.setHeader('Content-Type','application/json'); res.end(JSON.stringify({choices:[{message:{content:JSON.stringify(result)}}]}));
   }),t);
@@ -162,6 +167,7 @@ test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无�
   };
   const first = await run({});
   assert.equal(first.at(-1).outcome,'finish');
+  assert.deepEqual(formationStates,[false,true,true]);
   assert.deepEqual(native[0].guide,first.find(e=>e.type==='guide_loaded').plan);
   assert.equal(native[0].guide.actions[1].name,'克洛丝'); assert.equal(native[0].formation,true);
   const sniper=observedRoster.operators.find(o=>o.name==='克洛丝');
