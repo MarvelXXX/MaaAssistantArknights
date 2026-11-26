@@ -18,6 +18,27 @@ function requestsBaseInspection(text) {
   return /基建|贸易站|制造站/.test(text) && /只读|只(?:看|查看|核查)|仅(?:看|查看|核查)|(?:查看|核对|检查)[^。]{0,48}(?:不要|不准|禁止|不得)(?:交付|收取|收货)/.test(text);
 }
 
+function gameStartTap(frame, action) {
+  if (action.type !== 'tap' || !frame.image ||
+      !['com.hypergryph.arknights','com.hypergryph.arknights.bilibili'].includes(frame.client)) return false;
+  const header = frame.anchors.filter(a => a.source === 'OCR' && a.box?.[1] < frame.height * 0.12);
+  if (!['清除缓存','网络检测'].every(label => header.some(a => a.label === label))) return false;
+  const icon = frame.anchors.find(a => a.source === 'Maa' && a.label === '启动页 START' && a.score >= 0.94);
+  if (!icon) return false;
+  const [x, y, width, height] = icon.box;
+  if (action.x < x || action.x >= x + width || action.y < y || action.y >= y + height) return false;
+  let yellow = 0, samples = 0;
+  for (let row = y; row < y + height; row += 3) {
+    for (let col = x; col < x + width; col += 3) {
+      const i = (row * frame.width + col) * 4;
+      const data = frame.image.data;
+      if (data[i] > 195 && data[i+1] > 150 && data[i+2] < 90) yellow++;
+      samples++;
+    }
+  }
+  return yellow > samples * 0.12;
+}
+
 export function baseInspectionInput(frame, action) {
   if (action.type==='back' || action.type==='wait' || endTypes.has(action.type) || researchTools.has(action.type)) return true;
   const labels=frame.anchors.map(a=>(a.label || '').replace(/\s/g,''));
@@ -319,10 +340,12 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       await pause(action.ms, signal);
     } else {
       const current = await device.capture(signal);
-      if (!matches(frame, current, action) && !await sameReadyOperator(frame,current,action)) {
+      if (!matches(frame, current, action) && !await sameReadyOperator(frame,current,action) &&
+          !(frame.client === current.client && frame.width === current.width && frame.height === current.height &&
+            gameStartTap(frame, action) && gameStartTap(await observe(current, signal), action))) {
         staleCount++;
         emit({ type: 'stale', text: '画面已变化，跳过本次输入并重新判断。', turn });
-        steps.push({ turn, action, note, result: '已跳过，画面变化' });
+        steps.push({ turn, action, note, result: '画面已变化，本次输入未发送。请根据新截图重新选择稳定的目标。' });
         if (staleCount >= 3) throw new Error('画面连续变化，无法确定输入目标。');
         continue;
       }

@@ -10,6 +10,7 @@ import path from 'node:path';
 const ready = new Promise(resolve => cv.then(() => resolve()));
 const resource = process.env.ARK_MAA_RESOURCE || fileURLToPath(new URL('../../../resource/', import.meta.url));
 const labels = {
+  GameStart: '启动页 START',
   Home: '主界面设置入口', StartToWakeUp: '点击开始', ReceiveAward: '领取任务奖励',
   WeeklyTask: '周常任务标签', ReceiveMail: '领取邮件附件', StartButton2: '编队页开始行动',
   'StageDrops-Stars-3': '结算三星标志', 'StageDrops-Stars-2': '结算二星标志',
@@ -69,7 +70,8 @@ async function loadTemplates() {
   const templates = [];
   for (const [task, label] of Object.entries(labels)) {
     const spec = tasks[task];
-    if (!spec?.roi || spec.maskRange) continue;
+    // The START icon has a black background in both the template and its on-screen ROI.
+    if (!spec?.roi || (spec.maskRange && task !== 'GameStart')) continue;
     for (const file of [spec.template || task + '.png'].flat()) {
       if (!files.has(file)) continue;
       const mat = grayMat(pixels(await readFile(files.get(file))));

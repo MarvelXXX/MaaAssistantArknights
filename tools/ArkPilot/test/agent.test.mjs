@@ -135,6 +135,29 @@ test('画面变化后跳过旧点击，最后一次观察可以确认结果', as
   assert.equal(f.inputs.length, 0);
   assert.deepEqual(f.emitted.filter(e => ['stale','end'].includes(e.type)).map(e => e.type), ['stale','end']);
 });
+
+test('启动动画变化时只允许两帧都确认的明亮 START 图标', async () => {
+  const data = Buffer.alloc(160 * 90 * 4);
+  for (let i = 0; i < data.length; i += 4) { data[i] = 255; data[i+1] = 210; }
+  const title = { ...frame, width: 160, height: 90, client: 'com.hypergryph.arknights', image: { data },
+    anchors: [
+      { id: 1, source: 'Maa', label: '启动页 START', box: [75,80,10,8], score: 0.998 },
+      { id: 2, source: 'OCR', label: '清除缓存', box: [2,2,15,4] },
+      { id: 3, source: 'OCR', label: '网络检测', box: [23,2,15,4] },
+    ] };
+  for (const [fresh, id, expected] of [
+    [title, 1, 1], [title, 2, 0], [{...title, anchors: title.anchors.slice(1)}, 1, 0],
+    [{...title, anchors: title.anchors.slice(0,2)}, 1, 0],
+    [{...title, image: {data: Buffer.alloc(data.length)}}, 1, 0],
+    [{...title, client: 'com.hypergryph.arknights.bilibili'}, 1, 0],
+  ]) {
+    const f = fixture([{type:'tap',id},{type:'finish'}], { matches: () => false });
+    let captures = 0;
+    f.params.device.capture = async () => ++captures === 1 ? title : fresh;
+    await runAgent(f.params);
+    assert.equal(f.inputs.length, expected);
+  }
+});
 test('达到步数上限后仍读取最后一帧，但不继续操作', async () => {
   const f = fixture([{ type:'back' }, { type:'back' }]);
   await assert.rejects(runAgent(f.params), /上限/);
