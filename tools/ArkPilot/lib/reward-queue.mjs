@@ -367,6 +367,16 @@ export async function verifyWalletAccount(capture, uid) {
   throw new Error('连续读取首页仍不能核对游戏 UID，已停止。');
 }
 
+export async function confirmWalletBalances(capture, previous) {
+  // The latest confirmed reading can corroborate an unchanged balance across a sanity tick.
+  for (let attempt=0;attempt<4;attempt++) {
+    const current = await capture();
+    if (previous && current.uid===previous.uid && current.prime===previous.prime && current.orundum===previous.orundum) return current;
+    previous = current;
+  }
+  throw Object.assign(new Error('连续截图的首页货币读数不一致，尚未核账。'),{code:'WALLET_UNREADABLE'});
+}
+
 const numbers = wallet => ({prime:wallet.prime, orundum:wallet.orundum, ...(wallet.sanity == null ? {} : {sanity:wallet.sanity})});
 
 export function rewardWalletContext(before, current, previousNote) {
@@ -502,9 +512,13 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     if (!onStageEvent && result?.outcome==='ask') throw new Error(result.note || '游戏需要手动完成原账号登录。');
     return result?.note?.trim() || '未完成';
   };
+  let lastConfirmedWallet;
   const readHomeWallet = async observe => {
     const capture = ()=>readWalletWithRetry(()=>captureWallet(device,config,signal),signal,notify);
-    const read = ()=>verifyWalletAccount(capture,manifest.uid);
+    const read = async ()=>{
+      lastConfirmedWallet = await confirmWalletBalances(()=>verifyWalletAccount(capture,manifest.uid),lastConfirmedWallet);
+      return lastConfirmedWallet;
+    };
     try { return await read(); }
     catch (error) {
       signal.throwIfAborted();
@@ -630,7 +644,9 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     }
     const previous = ledger.items[t.id] || {};
     const reviewingExchange = !!t.intelExchange && (previous.status==='余额待复核' || previous.exchangeAuditOnly===true);
-    const before = (previous.status === '进行中' || reviewingExchange) && previous.before ? previous.before : numbers(wallet);
+    const savedBefore = (previous.status === '进行中' || reviewingExchange) ? previous.before : undefined;
+    const before = savedBefore || numbers(wallet);
+    if (!savedBefore) await imageFile(t.id,'before',wallet.image);
     const attempts = (previous.attempts || 0) + 1;
     ledger.items[t.id] = {...previous, status:'进行中', attempts, before, started:new Date().toISOString()};
     if (reviewingExchange) ledger.items[t.id].exchangeAuditOnly=true;
