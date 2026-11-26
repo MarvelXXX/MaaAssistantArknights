@@ -1,9 +1,12 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
+const pngSignature = Buffer.from([137,80,78,71,13,10,26,10]);
+const pngEnd = Buffer.from([0,0,0,0,73,69,78,68,174,66,96,130]);
 const clients = new Set([
   'com.hypergryph.arknights', 'com.hypergryph.arknights.bilibili',
   'com.YoStarEN.Arknights', 'com.YoStarJP.Arknights',
@@ -29,12 +32,17 @@ async function adb(args, signal) {
   } catch (error) {
     signal?.throwIfAborted();
     if (error.code === 'ENOENT') throw new Error('找不到 ADB。请安装 Android Platform Tools，或用 ARK_ADB 指定 adb 可执行文件。');
-    throw new Error('ADB 命令失败。' + (error.stderr?.toString().trim().slice(0, 300) || '请检查设备连接。'));
+    const detail = error.stderr?.toString().trim().slice(0, 300);
+    const failure = new Error('ADB 命令失败。' + (detail || '请检查设备连接。'), { cause: error });
+    if (error.killed || /device (?:offline|'[^']+' not found)|transport error|connection reset|error: closed|protocol fault/i.test(detail || '')) {
+      failure.code = 'ADB_TRANSPORT';
+    }
+    throw failure;
   }
 }
 
-export async function listDevices(signal) {
-  const output = (await adb(['devices', '-l'], signal)).toString();
+export async function listDevices(signal, command = adb) {
+  const output = (await command(['devices', '-l'], signal)).toString();
   return output.split(/\r?\n/).flatMap(line => {
     const m = line.match(/^([^\s]+)\s+(device|offline|unauthorized)\b(.*)/);
     if (!m) return [];
@@ -50,10 +58,10 @@ export async function connectDevice(address, signal) {
   return listDevices(signal);
 }
 
-export async function selectDevice(serial, signal) {
-  const devices = await listDevices(signal);
+export async function selectDevice(serial, signal, command = adb) {
+  const devices = await listDevices(signal, command);
   if (!devices.some(d => d.serial === serial && d.state === 'device')) throw new Error('请选择在线且已授权的 ADB 设备。');
-  const run = (args, s) => adb(['-s', serial, ...args], s);
+  const run = (args, s) => command(['-s', serial, ...args], s);
   let client;
   async function checkGame(s) {
     const output = (await run(['shell', 'dumpsys', 'window', 'displays'], s)).toString();
@@ -72,11 +80,22 @@ export async function selectDevice(serial, signal) {
   return {
     checkGame,
     async capture(s) {
-      await checkGame(s);
-      const png = await run(['exec-out', 'screencap', '-p'], s);
-      await checkGame(s);
-      if (!png.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw new Error('设备没有返回有效 PNG 截图。');
-      return { png, width: png.readUInt32BE(16), height: png.readUInt32BE(20), client };
+      for (let attempt = 0; ; attempt++) {
+        s?.throwIfAborted();
+        try {
+          await checkGame(s);
+          const png = await run(['exec-out', 'screencap', '-p'], s);
+          await checkGame(s);
+          if (png.length < 45 || !png.subarray(0, 8).equals(pngSignature) || !png.subarray(-12).equals(pngEnd)) {
+            throw Object.assign(new Error('设备没有返回完整 PNG 截图。'), { code: 'ADB_FRAME' });
+          }
+          return { png, width: png.readUInt32BE(16), height: png.readUInt32BE(20), client };
+        } catch (error) {
+          s?.throwIfAborted();
+          if (attempt >= 2 || !['ADB_TRANSPORT', 'ADB_FRAME'].includes(error.code)) throw error;
+          await delay(500 * (attempt + 1), undefined, { signal: s });
+        }
+      }
     },
     async input(action, s) {
       await checkGame(s);
