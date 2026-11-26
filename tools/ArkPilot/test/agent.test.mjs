@@ -32,6 +32,32 @@ test('视频执行记录保留实际匹配的分 P', async () => {
   await runAgent(f.params);
   assert.equal(f.emitted.find(e=>e.type==='applied').action.part,8);
 });
+
+test('首通决策临时断连后重新截图，保留此前已做动作且只等待两次',async()=>{
+  const temporary=Object.assign(new Error('断连'),{code:'MODEL_TEMPORARY'}), observed=[], waits=[];
+  let captures=0;
+  const f=fixture([], {retryModel:true, limit:3, pause:async ms=>waits.push(ms),
+    observe:async raw=>({...raw,sequence:++captures}),
+    plan:async(_config,context,current)=>{
+      observed.push([current.sequence,context.stepsSoFar]);
+      if (observed.length===1) return answer({type:'tap',id:3});
+      if (observed.length<5) throw temporary;
+      return answer({type:'finish'});
+    }});
+  await assert.rejects(runAgent(f.params),e=>e===temporary);
+  assert.deepEqual(observed,[[1,0],[2,1],[3,1],[4,1]]);
+  assert.equal(f.inputs.length,1);
+  assert.deepEqual(waits.filter(ms=>ms>=10000),[10000,30000]);
+  const g=fixture([], {retryModel:true, plan:async()=>{if (!g.emitted.some(e=>e.text?.includes('重新观察当前画面'))) throw temporary;return answer({type:'finish'});}});
+  await runAgent(g.params);
+  assert.equal(g.emitted.at(-1).outcome,'finish');
+  assert.equal(g.inputs.length,0);
+  for (const [retryModel,error] of [[false,temporary],[true,Object.assign(new Error('HTTP 401'),{status:401})]]) {
+    const h=fixture([],{retryModel,plan:async()=>{throw error;}});
+    await assert.rejects(runAgent(h.params),e=>e===error);
+    assert.equal(h.emitted.filter(e=>e.type==='frame').length,1);
+  }
+});
 test('画面变化后跳过旧点击，最后一次观察可以确认结果', async () => {
   const f = fixture([{ type:'tap', id:3 }, { type:'ask' }], { matches: () => false });
   await runAgent(f.params);

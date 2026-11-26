@@ -387,7 +387,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             await runNative({type:'maa',task:'Copilot'},step);
             return 'Maa 已执行后续作业，请核对同一局的结算。';
           } : undefined;
-          await runAgent({ config, device, instruction, history, continueBattle, requireAdaptation:queue ? false : undefined,
+          await runAgent({ config, device, instruction, history, continueBattle, retryModel:queue, requireAdaptation:queue ? false : undefined,
             readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home && allowNative ? runNative : null });
         }
         if (queue) {

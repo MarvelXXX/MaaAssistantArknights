@@ -125,12 +125,12 @@ async function deployFromGuide(action, guide, frame, device, signal, pause) {
 }
 
 export async function runAgent({ config, device, instruction, history, readOnly, limit, signal, emit,
-  runNative, guidance, lookupGuide, continueBattle, requireAdaptation = wantsAdaptedPlan(instruction),
+  runNative, guidance, lookupGuide, continueBattle, retryModel = false, requireAdaptation = wantsAdaptedPlan(instruction),
   observe = recognize, plan = decide, matches = stillMatches, pause = (ms, s) => delay(ms, undefined, { signal: s }) }) {
   const steps = [];
   const attemptedTasks = new Set();
   const protectsCurrency = noPremiumSpend.test(instruction);
-  let adaptation, rejectedInput;
+  let adaptation, rejectedInput, modelRetries = 0;
   let staleCount = 0, actionCount = 0, previousInput, identicalInputs = 0;
   const recent = () => steps.length <= 18 ? steps : [...steps.slice(0, 3), ...steps.slice(-15)];
   for (let turn = 1; ; turn++) {
@@ -153,7 +153,17 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       }));
     }
     if (rejectedInput) context.rejectedInput = rejectedInput;
-    const reply = await plan(config, context, frame, signal);
+    let reply;
+    try { reply = await plan(config, context, frame, signal); }
+    catch (error) {
+      signal.throwIfAborted();
+      if (!retryModel || error.code!=='MODEL_TEMPORARY' || modelRetries>=2) throw error;
+      const seconds = [10,30][modelRetries++];
+      emit({type:'status',text:'模型连接暂时中断，'+seconds+' 秒后重新观察当前画面。',turn});
+      await pause(seconds*1000,signal);
+      continue;
+    }
+    modelRetries=0;
     let decision;
     try {
       decision = validateDecision(reply, frame, readOnly, config.vision, !!runNative, !!guidance?.plan);

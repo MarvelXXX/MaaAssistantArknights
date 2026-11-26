@@ -59,8 +59,10 @@ function failedGuides(row) {
 export function nextRewardGuide(target, row) {
   if (target.plan) return;
   if (!row?.note && row?.status !== '未完成') return target.guideId;
-  if (!target.retryGuideIds?.length) return;
   const failed = failedGuides(row);
+  const reason = row.status==='进行中' ? row.lastStatus : row.status;
+  if (['理智不足','结晶不足','模型待重试'].includes(reason) && target.guideId && !failed.has(target.guideId)) return target.guideId;
+  if (!target.retryGuideIds?.length) return;
   if (row.review || row.status === '未完成') {
     for (const id of row.offeredGuideIds || []) failed.add(id);
   }
@@ -129,6 +131,7 @@ export function reconcileReward(target, report, before, after) {
   if (report.startsWith('理智不足')) return '理智不足';
   if (report.startsWith('结晶不足')) return '结晶不足';
   if (report.startsWith('入口关闭')) return '入口关闭';
+  if (report.startsWith('模型待重试')) return '模型待重试';
   return '未完成';
 }
 
@@ -179,9 +182,9 @@ export function needsParadoxVisit(target, row, anchors) {
     anchors.some(a=>a.source==='OCR' && a.label.replace(/\s/g,'')==='首次掉落');
 }
 
-export async function visitParadoxDetail(runCommand, target, name, signal, emit) {
+export async function visitParadoxDetail(runCommand, target, name, signal, emit, captureStable, keepAttempt) {
   const stopped = new AbortController();
-  let detail;
+  let detail, candidate;
   try {
     await runCommand({instruction:'只核对 '+target.label+' 的悖论模拟完成状态。从首页进入干员列表、干员本人、档案、悖论模拟，停在详情页即可。禁止开战、养成、消费、领取任何物品或切换账号。'+spendRule,
       limit:24,allowNative:false,signal:AbortSignal.any([signal,stopped.signal,AbortSignal.timeout(8*minute)]),
@@ -192,7 +195,9 @@ export async function visitParadoxDetail(runCommand, target, name, signal, emit)
         // Stop on the detail screen before the planner can tap Start, even for a different operator.
         const start=anchors.some(a=>a.source==='Maa' && a.label==='悖论模拟开始按钮');
         const detailText=anchors.some(a=>a.source==='OCR' && a.label.includes('开始模拟'));
-        if (!start && !detailText && !stoneRecovery(anchors)) return;
+        if (stoneRecovery(anchors)) { stopped.abort(); return; }
+        if (!start && !detailText) return;
+        candidate=event;
         if (completedParadox(anchors,name)) detail=event.preview;
         stopped.abort();
       }});
@@ -200,6 +205,13 @@ export async function visitParadoxDetail(runCommand, target, name, signal, emit)
     signal.throwIfAborted();
     if (!stopped.signal.aborted) throw error;
   }
+  for (let i=0; candidate && !detail && captureStable && i<3; i++) {
+    const frame=await captureStable();
+    if (stoneRecovery(frame.anchors)) break;
+    candidate=frame;
+    if (completedParadox(frame.anchors,name)) detail=frame.preview;
+  }
+  if (candidate && !detail) await keepAttempt?.(candidate.preview);
   return detail;
 }
 
@@ -485,7 +497,12 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       if (!stage?.name || stage.stageId!==target.stage || !stage.levelId.startsWith('obt/memory/')) continue;
       notify('复核 '+target.label+' 的已完成标志，仅查看详情。');
       let detail;
-      try { detail=await visitParadoxDetail(runCommand,target,stage.name,signal,emit); }
+      try {
+        detail=await visitParadoxDetail(runCommand,target,stage.name,signal,emit,async()=>{
+          await delay(650,undefined,{signal});
+          return recognize(await device.capture(signal),signal);
+        },preview=>imageFile(target.id,'detail-attempt',preview));
+      }
       catch (error) { signal.throwIfAborted(); notify('关卡详情复核未完成。'+error.message); }
       const beforeVisit=wallet;
       wallet=await homeWallet();
@@ -498,7 +515,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
         ledger.opened[target.chapter]=true;
         await save();
         notify(target.label+' · 首通已核。原结算和复核关卡画面已保存。');
-      }
+      } else notify(target.label+' · 保留待复核，尚未取得完整的同名完成标志与复查余额。');
       continue;
     }
     const t = selectRewardTarget(manifest.targets,ledger,Date.now(),wallet.sanity);
@@ -569,7 +586,8 @@ export async function runRewardQueue({filename, serial, device, config, runComma
         restoredTarget=t.id;
         continue;
       }
-      report=error.code==='STONE_RECOVERY' ? error.message : '未完成 '+error.message;
+      if (error.code==='STONE_RECOVERY') report=error.message;
+      else report=(error.code==='MODEL_TEMPORARY' ? '模型待重试 ' : '未完成 ')+error.message;
     }
     restoredTarget=undefined;
     wallet = await homeWallet(evidence.observe);
@@ -604,6 +622,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     }
     else if (status === '结晶不足') ledger.crystalWait = row.nextAt = Date.now()+24*60*minute;
     else if (status === '入口关闭') row.nextAt = Date.now()+24*60*minute;
+    else if (status === '模型待重试') row.nextAt = Date.now()+5*minute;
     else if (status === '未完成' && attempts<3) row.nextAt = Date.now()+45*minute;
     else row.review = true;
     await save();

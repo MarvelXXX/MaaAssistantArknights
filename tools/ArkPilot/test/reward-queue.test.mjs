@@ -116,6 +116,29 @@ test('无名悖论首通结算只在精确到账时回看详情，看到开始�
   assert.equal(await inspect(anchors.filter(a=>a.label!=='已完成模拟作战')),undefined);
   assert.equal(await inspect([...anchors,ocr('公开招募'),ocr('采购中心')]),undefined);
   assert.equal(await inspect([{source:'Maa',label:'源石恢复提示'}]),undefined);
+  const arrive=async({emit,signal})=>{
+    emit({type:'frame',preview:'opening',anchors:[start]});
+    signal.throwIfAborted();
+  };
+  const controller=new AbortController();
+  let captures=0, diagnostic;
+  const stable=async()=>({preview:'complete',anchors:++captures===2 ? anchors : [start]});
+  assert.equal(await visitParadoxDetail(arrive,target,'冷静的支援者',controller.signal,()=>{},stable),'complete');
+  assert.equal(captures,2);
+  assert.equal(await visitParadoxDetail(arrive,target,'另一关',controller.signal,()=>{},stable,p=>{diagnostic=p;}),undefined);
+  assert.equal(diagnostic,'complete');
+});
+
+test('理智或模型阻塞后仍可载入唯一作业，真实胜负继续以余额和结算为准',()=>{
+  const target={stage:'act25side_04',guideId:'23093',currency:'prime',amount:1};
+  for (const status of ['理智不足','模型待重试','结晶不足']) {
+    assert.equal(nextRewardGuide(target,{status,note:status,offeredGuideIds:['23093']}),'23093');
+    assert.equal(nextRewardGuide(target,{status:'进行中',lastStatus:status,note:status}),'23093');
+    assert.equal(nextRewardGuide(target,{status,note:status,failedGuideIds:['23093']}),undefined);
+  }
+  const before={prime:160,orundum:26678};
+  assert.equal(reconcileReward(target,'模型待重试 断连',before,before),'模型待重试');
+  assert.equal(reconcileReward(target,'模型待重试 断连',before,{...before,prime:161}),'余额待复核');
 });
 
 test('悖论总结中断后用本关已完成的截图与独立余额核账', async () => {
