@@ -1,10 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { intelCheckout, runAgent, validateDecision } from '../lib/agent.mjs';
+import { baseInspectionInput, intelCheckout, runAgent, validateDecision } from '../lib/agent.mjs';
 import { intelBalanceCrop } from '../lib/vision.mjs';
 
 const frame = { width: 1600, height: 900, anchors: [{ id: 3, box: [600, 50, 90, 40] }], png: Buffer.from('frame') };
 const answer = action => ({ intent: 'operate', goal: '打开任务界面', note: '检查任务入口', action });
+test('只查基建时拦截可直接收货的整张房间卡片，并在真实输入前复核导航',async()=>{
+  const room={...frame,anchors:[
+    {id:1,label:'进驻总览',box:[40,108,160,50]},
+    {id:2,label:'贸易站',box:[190,336,105,42]},
+    {id:3,label:'制造站',box:[240,606,110,35]},
+  ]};
+  assert.equal(baseInspectionInput(room,{type:'tap',x:237,y:358}),false);
+  assert.equal(baseInspectionInput(room,{type:'tap',x:299,y:621}),false);
+  assert.equal(baseInspectionInput(room,{type:'tap',x:100,y:135}),true);
+  assert.equal(baseInspectionInput(room,{type:'swipe',x:237,y:358,x2:240,y2:360}),false);
+  const f=fixture([{type:'tap',id:2},{type:'tap',id:3},{type:'tap',id:1},{type:'finish'}],{instruction:'只查看基建',observe:async()=>room});
+  await runAgent(f.params);
+  assert.deepEqual(f.inputs,[{type:'tap',x:120,y:133}]);
+  assert.equal(f.emitted.filter(e=>e.type==='stale').length,2);
+  let reads=0;
+  const g=fixture([{type:'tap',id:1}],{inspectBase:true,observe:async()=>++reads===1 ? room : {...room,anchors:[room.anchors[1]]}});
+  await assert.rejects(runAgent(g.params),/导航目标已变化/);
+  assert.deepEqual(g.inputs,[]);
+});
 test('情报凭证订单逐帧核实付款币种、总价、库存及余额，每单仅提交一次',async()=>{
   const width=1440,height=810,image={width,height,data:Buffer.alloc(width*height*4)};
   for (const [left,top,w,h] of [[1019,224,28,40],[1036,568,19,27]]) {

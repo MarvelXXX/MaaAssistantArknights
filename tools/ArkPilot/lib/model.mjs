@@ -78,6 +78,15 @@ async function request(config, operation, payload, signal) {
     try {
       const result = await fetch(target, options);
       if (!result.ok) {
+        if (result.status===429) {
+          const body=await result.json().catch(()=>null);
+          const quota=[body?.error?.code,body?.error?.type].some(v=>['insufficient_quota','billing_hard_limit_reached','billing_not_active'].includes(v));
+          if (quota) throw Object.assign(new Error('模型服务报告账户额度不足（HTTP 429），进度已保留。'),{status:429,code:'MODEL_QUOTA'});
+          const retry=result.headers.get('retry-after')?.trim();
+          const seconds=retry && /^\d+(?:\.\d+)?$/.test(retry) ? Number(retry) : (Date.parse(retry)-Date.now())/1000;
+          const retryAfterMs=Number.isFinite(seconds) ? Math.min(2147000000,Math.max(1000,Math.ceil(seconds*1000))) : 60000;
+          throw Object.assign(new Error('模型请求受限（HTTP 429）。'),{status:429,code:'MODEL_TEMPORARY',retryAfterMs});
+        }
         await result.body?.cancel();
         const hint = { 400: '检查模型名称、输入模式和图像支持。', 401: '检查 API Key。', 403: '检查 Key 权限。', 404: '检查 URL、模型 ID 或手动填写模型。', 429: '请稍后重试或检查额度。' };
         const error = new Error('模型服务返回 HTTP ' + result.status + '。' + (hint[result.status] || '请检查服务状态。'));
@@ -89,6 +98,7 @@ async function request(config, operation, payload, signal) {
     } catch (error) {
       signal?.throwIfAborted();
       if (timeout.aborted) throw Object.assign(new Error('模型响应超时，请重试。'), {code:'MODEL_TEMPORARY'});
+      if (error.status===429) throw error;
       const transient = [408,502,503,504].includes(error.status) || error instanceof SyntaxError ||
         ['ECONNRESET','ECONNREFUSED','ENETUNREACH','EHOSTUNREACH','EPIPE','EAI_AGAIN','ETIMEDOUT','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_BODY_TIMEOUT','UND_ERR_HEADERS_TIMEOUT'].includes(error.cause?.code);
       if (!transient || attempt > 0) {

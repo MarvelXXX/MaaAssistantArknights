@@ -41,6 +41,9 @@ function validateManifest(manifest, serial) {
     if (t.retryGuideIds != null && (!Array.isArray(t.retryGuideIds) || t.retryGuideIds.length>20 ||
         t.retryGuideIds.some(id=>typeof id!=='string' || !/^[1-9]\d{0,9}$/.test(id)))) throw new Error('备选作业号无效。');
     if (t.plan) t.plan = checkPlan(t.plan);
+    if (t.inspectBase!=null && (typeof t.inspectBase!=='boolean' || t.inspectBase && (t.intelExchange || t.stage || t.ap!==0))) {
+      throw new Error('只读基建核查不能附带作战或兑换任务。');
+    }
     if (t.intelExchange != null) {
       const {lots,tickets,stock} = t.intelExchange;
       if (![lots,tickets,stock,lots*100].every(Number.isSafeInteger) || lots < 1 || tickets < lots*20 || stock < lots ||
@@ -323,7 +326,7 @@ export async function readWalletWithRetry(capture, signal, notify, pause = delay
     catch (error) {
       signal.throwIfAborted();
       if (!['MODEL_TEMPORARY','WALLET_UNREADABLE'].includes(error.code) || attempt>=2) throw error;
-      const seconds = error.code==='MODEL_TEMPORARY' ? [10,30][attempt] : 1;
+      const seconds = error.code==='MODEL_TEMPORARY' ? Math.max([10,30][attempt],Math.ceil((error.retryAfterMs || 0)/1000)) : 1;
       notify(error.message+' '+seconds+' 秒后重新截图核对首页余额。');
       await pause(seconds*1000,undefined,{signal});
     }
@@ -338,7 +341,7 @@ export async function waitForWalletModel(read, signal, notify, pause = delay) {
     catch (error) {
       signal.throwIfAborted();
       if (error.code !== 'MODEL_TEMPORARY') throw error;
-      const minutes = intervals[Math.min(attempt, intervals.length - 1)];
+      const minutes = Math.max(intervals[Math.min(attempt, intervals.length - 1)],Math.ceil((error.retryAfterMs || 0)/minute));
       notify('模型连接仍未恢复，后台清单暂停操作。'+minutes+' 分钟后从新截图核对首页和账号。');
       await pause(minutes * minute, undefined, { signal });
     }
@@ -482,9 +485,9 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await rename(report+'.tmp',report);
   };
   const notify = text => emit({type:'checkpoint',text});
-  const play = async (instruction, {limit, onStageEvent, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, intelExchange, allowNative = true, fixedTeam = false}, observe = onStageEvent) => {
+  const play = async (instruction, {limit, onStageEvent, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, intelExchange, inspectBase, allowNative = true, fixedTeam = false}, observe = onStageEvent) => {
     let result;
-    const options={instruction, limit, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, intelExchange, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
+    const options={instruction, limit, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, intelExchange, inspectBase, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
       if (e.type === 'end') { result = e; return; }
       observe?.(e);
       emit(e);
@@ -684,12 +687,14 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       }
       report = await play('本轮只处理 '+t.label+'。'+walletContext+caution+t.route+'。'+avoid+loaded+annihilation+instructions+spending,{
           limit:75, ap:t.ap, expectedStage:t.stage, guide, guideId:guide ? candidate : undefined, onGuideStart:id=>{usedGuide=id;},
-          resumeAfterStep:t.resumeAfterStep, allowNative:!t.intelExchange && !credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
+          resumeAfterStep:t.resumeAfterStep, allowNative:!t.inspectBase && !t.intelExchange && !credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
+          inspectBase:t.inspectBase===true,
           intelExchange:t.intelExchange && {...t.intelExchange,auditOnly:reviewingExchange || before.prime!==wallet.prime || before.orundum!==wallet.orundum},
           onStageEvent:observeStage,
         });
     } catch (error) {
       signal.throwIfAborted();
+      if (error.code==='MODEL_QUOTA') throw error;
       if (error.code==='GAME_SESSION_EXPIRED') {
         if (restoredTarget===t.id) throw new Error('同一关再次出现登录认证失效，已保留进度。');
         notify('游戏登录认证失效，保留本局记录。正在恢复原账号并核对到账情况。');

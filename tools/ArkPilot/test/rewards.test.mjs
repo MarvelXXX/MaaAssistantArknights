@@ -4,6 +4,16 @@ import { validateDecision } from '../lib/agent.mjs';
 import { decide, listModels } from '../lib/model.mjs';
 import { matchChapterRewards, matchRewards, matchSimulations } from '../lib/rewards.mjs';
 
+test('429限流尊重 Retry-After，额度不足不作为临时断连重试',async t=>{
+  const cfg={url:'http://test.invalid/v1'};
+  let code='rate_limit_exceeded',calls=0;
+  t.mock.method(globalThis,'fetch',async()=>{calls++;return Response.json({error:{code}},{status:429,headers:{'retry-after':'72'}});});
+  await assert.rejects(listModels(cfg),e=>e.code==='MODEL_TEMPORARY' && e.retryAfterMs===72000);
+  code='insufficient_quota';
+  await assert.rejects(listModels(cfg),e=>e.code==='MODEL_QUOTA' && !e.retryAfterMs);
+  assert.equal(calls,2);
+});
+
 test('模型服务暂时不可用与无效凭据分别上报给首页读数重试',async t=>{
   const cfg={url:'http://test.invalid/v1'}, signal=AbortSignal.timeout(5000);
   let status=503, requests=0;

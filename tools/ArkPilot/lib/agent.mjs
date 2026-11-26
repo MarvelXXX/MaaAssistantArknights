@@ -14,6 +14,32 @@ function premiumConfirmation(frame) {
   return /(?:是否|确认|确定)(?:要|将|继续)?(?:花费|消耗|使用|用)[^。！？]{0,24}(?:源石|合成玉)|(?:是否|确认|确定)[^。！？]{0,12}源石[^。！？]{0,12}兑换[^。！？]{0,12}合成玉/u.test(text);
 }
 
+function requestsBaseInspection(text) {
+  return /基建|贸易站|制造站/.test(text) && /只读|只(?:看|查看|核查)|仅(?:看|查看|核查)|(?:查看|核对|检查)[^。]{0,48}(?:不要|不准|禁止|不得)(?:交付|收取|收货)/.test(text);
+}
+
+export function baseInspectionInput(frame, action) {
+  if (action.type==='back' || action.type==='wait' || endTypes.has(action.type) || researchTools.has(action.type)) return true;
+  const labels=frame.anchors.map(a=>(a.label || '').replace(/\s/g,''));
+  const x=action.x/frame.width, y=action.y/frame.height;
+  const atLabel = pattern => frame.anchors.some((a,i)=>a.box && pattern.test(labels[i]) &&
+    action.x>=a.box[0]-2 && action.x<=a.box[0]+a.box[2]+2 && action.y>=a.box[1]-2 && action.y<=a.box[1]+a.box[3]+2);
+  if (action.type!=='tap') return false;
+  const home=labels.includes('主界面设置入口');
+  if (home) return (x>0.64 && y>0.77 && y<0.98 && atLabel(/基建|仓库/)) ||
+    (x>0.72 && x<0.81 && y>0.80 && y<0.88);
+  if (atLabel(/^(?:取消|返回|首页)$/)) return true;
+  const overview=labels.some(s=>s.includes('进驻总览') || s.includes('建造模式'));
+  if (overview) {
+    // The whole room card can instantly deliver an order even when the tap hits its name.
+    return x<0.2 && y<0.225 && atLabel(/^进驻总览$/) ||
+      Math.abs(frame.width/frame.height-16/9)<0.015 && x>0.18 && x<0.24 && y>0.025 && y<0.085;
+  }
+  if (atLabel(/^(?:基础物品|养成材料|消耗物品)$/) && labels.includes('仓库')) return true;
+  const room=labels.some(s=>/(?:贸易站|制造站)B\d{3}|龙门商法|开采协力/.test(s));
+  return room && x<0.19 && atLabel(/^(?:设施信息|进驻信息|(?:贸易站)?B\d{3}|\d{2}贸易站)$/);
+}
+
 // Sample the purple RE ticket on the 16:9 CN shop layout. Both price lines must show it.
 function hasIntelTicket(image, left, top, width, height) {
   if (!image || Math.abs(image.width / image.height - 16 / 9) > 0.015) return false;
@@ -162,12 +188,13 @@ async function deployFromGuide(action, guide, frame, device, signal, pause) {
 }
 
 export async function runAgent({ config, device, instruction, history, readOnly, limit, signal, emit,
-  runNative, guidance, lookupGuide, continueBattle, intelExchange, retryModel = false, requireAdaptation = wantsAdaptedPlan(instruction),
+  runNative, guidance, lookupGuide, continueBattle, intelExchange, inspectBase=requestsBaseInspection(instruction), retryModel = false, requireAdaptation = wantsAdaptedPlan(instruction),
   observe = recognize, plan = decide, matches = stillMatches, pause = (ms, s) => delay(ms, undefined, { signal: s }) }) {
   const steps = [];
   const attemptedTasks = new Set();
   const protectsCurrency = noPremiumSpend.test(instruction);
   let submittedExchange = false;
+  let blockedBaseInputs=0;
   async function observeGame(raw) {
     const frame=await observe(raw,signal);
     const crop=intelExchange && intelBalanceCrop(frame);
@@ -204,13 +231,14 @@ export async function runAgent({ config, device, instruction, history, readOnly,
         result: typeof step.result === 'string' ? step.result : step.result?.error || '已查资料',
       }));
     }
+    if (inspectBase) context.baseInspection='基建只查看。总览里的整张贸易站与制造站卡片都可能直接收货。只用进驻总览查看和 back 返回；无安全入口就报告只看到了哪些证据。不可点房间卡片或通知。';
     if (rejectedInput) context.rejectedInput = rejectedInput;
     let reply;
     try { reply = await plan(config, context, frame, signal); }
     catch (error) {
       signal.throwIfAborted();
       if (!retryModel || error.code!=='MODEL_TEMPORARY' || modelRetries>=2) throw error;
-      const seconds = [10,30][modelRetries++];
+      const seconds = Math.max([10,30][modelRetries++],Math.ceil((error.retryAfterMs || 0)/1000));
       emit({type:'status',text:'模型连接暂时中断，'+seconds+' 秒后重新观察当前画面。',turn});
       await pause(seconds*1000,signal);
       continue;
@@ -242,6 +270,13 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       return;
     }
     if (actionCount >= limit) throw new Error('已达到本次动作上限，目标尚未确认完成。');
+    if (inspectBase && !baseInspectionInput(frame,action)) {
+      const reason='只读基建已拦截该区域。可点击进驻总览或使用 back 返回。';
+      steps.push({turn,action,note,result:reason});
+      emit({type:'stale',text:reason,turn});
+      if (++blockedBaseInputs>=3) {emit({type:'end',outcome:'stop',goal,count:actionCount,note:reason});return;}
+      continue;
+    }
     const buying = intelExchange && intelCheckout(frame,action,intelExchange,submittedExchange);
     emit({ type: 'decision', action, note, goal, turn });
     if (researchTools.has(action.type)) {
@@ -283,6 +318,9 @@ export async function runAgent({ config, device, instruction, history, readOnly,
         steps.push({ turn, action, note, result: '已跳过，画面变化' });
         if (staleCount >= 3) throw new Error('画面连续变化，无法确定输入目标。');
         continue;
+      }
+      if (inspectBase && action.type==='tap' && !baseInspectionInput(await observe(current,signal),action)) {
+        throw new Error('基建只读导航目标已变化，未发送点击。');
       }
       staleCount = 0;
       const signature = JSON.stringify(action);
