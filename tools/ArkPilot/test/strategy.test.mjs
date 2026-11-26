@@ -143,12 +143,14 @@ test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无�
   const decision = a => ({intent:'operate',goal:'按我的干员适配',note:'核对编队',action:{type:a,...(a==='maa'?{task:'Copilot'}:{})}});
   let actions = ['adapt_guide','maa','finish'];
   let observedRoster;
+  let formationReport;
   const formationStates=[];
   const model = await listen(http.createServer(async(req,res)=>{
     let body=''; for await (const part of req) body+=part;
     const msgs=JSON.parse(body).messages;
     if (!msgs[0].content.includes('每位一人')) {
-      const guidance=JSON.parse(msgs[1].content).guidance;
+      const {guidance,recentSteps}=JSON.parse(msgs[1].content);
+      formationReport ??= recentSteps?.find(step=>step.action?.task==='Copilot')?.result;
       observedRoster ??= guidance.roster;
       formationStates.push(guidance.formation);
     }
@@ -159,7 +161,12 @@ test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无�
   const image = new PNG({width:320,height:180}), png = PNG.sync.write(image);
   const app=await listen(createServer({getHome:async()=>'fixture',getDevice:async()=>{
     devices++; return {capture:async()=>({png,width:320,height:180,client:'com.hypergryph.arknights'})};
-  },native:async(a,options)=>native.push(options)}),t);
+  },native:async(a,options)=>{
+    native.push(options);
+    for (const selectedOperator of ['克洛丝','芬','克洛丝']) {
+      options.progress('Maa 自动编队选入 '+selectedOperator,{selectedOperator});
+    }
+  }}),t);
   const run = async extra=>{
     const res=await fetch(app+'/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       guide:author,roster:box,provider:'api',apiOptIn:true,url:model,model:'fixture',vision:false,instruction:'按我的干员适配并执行',...extra,
@@ -169,6 +176,7 @@ test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无�
   const first = await run({});
   assert.equal(first.at(-1).outcome,'finish');
   assert.deepEqual(formationStates,[false,true,true]);
+  assert.match(formationReport,/已选入克洛丝、芬。/);
   assert.deepEqual(native[0].guide,first.find(e=>e.type==='guide_loaded').plan);
   assert.equal(native[0].guide.actions[1].name,'克洛丝'); assert.equal(native[0].formation,true);
   const sniper=observedRoster.operators.find(o=>o.name==='克洛丝');

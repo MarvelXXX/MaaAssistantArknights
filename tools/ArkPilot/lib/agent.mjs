@@ -320,13 +320,14 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       if (!result?.error) emit({type:'applied',turn,action:executed});
       continue;
     }
+    let nativeReport;
     if (action.type === 'maa') {
       const key = ['Copilot','ParadoxCopilot'].includes(action.task)
         ? JSON.stringify(['guide', guidance.plan.stage]) : JSON.stringify(action);
       if (attemptedTasks.has(key)) throw new Error('本条指令已尝试该 Maa 任务，已停止重复执行。');
       attemptedTasks.add(key);
       try {
-        await runNative(action);
+        nativeReport = await runNative(action);
       } catch (error) {
         signal.throwIfAborted();
         if (error.beforeStart) attemptedTasks.delete(key);
@@ -387,7 +388,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       previousInput = { signature, png: frame.png };
     }
     actionCount++;
-    steps.push({ turn, action, note, result: action.type === 'maa' ? 'Maa 任务链已结束，请核对结果' : action.type === 'wait' ? '已等待' : '已发送，需查看下一帧' });
+    steps.push({ turn, action, note, result: action.type === 'maa' ? nativeReport || 'Maa 任务链已结束，请核对结果' : action.type === 'wait' ? '已等待' : '已发送，需查看下一帧' });
     emit({ type: 'applied', turn, action });
     if (action.type==='deploy' && continueBattle) {
       try {
