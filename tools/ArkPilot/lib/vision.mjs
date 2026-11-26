@@ -113,6 +113,12 @@ export async function recognize(frame, signal) {
   const image = pixels(frame.png);
   const [templates, ocr] = await Promise.all([matchTemplates(image, frame.client), readText(frame, signal)]);
   signal?.throwIfAborted();
+  if (templates.anchors.some(a => a.label === '悖论模拟开始按钮') &&
+      ocr.lines.some(line => line.label === '悖论模拟') &&
+      !ocr.lines.some(line => line.label.replace(/[\s\p{P}\p{S}]/gu, '') === '已完成模拟作战')) {
+    const badge = await readParadoxCompletion(image, frame.client, signal);
+    if (badge) ocr.lines.push(badge);
+  }
   const anchors = [...templates.anchors, ...ocr.lines].map((a, i) => ({ ...a, id: i + 1 }));
   await ready;
   const rgba = cv.matFromImageData(image), small = new cv.Mat();
@@ -123,6 +129,29 @@ export async function recognize(frame, signal) {
     return { ...frame, image, anchors, preview: 'data:image/jpeg;base64,' + bytes.toString('base64'),
       recognition: [templates.status, ocr.status] };
   } finally { rgba.delete(); small.delete(); }
+}
+
+// The completion text in the lower left is grey on black; exclude the adjoining checkmark.
+async function readParadoxCompletion(image, client, signal) {
+  const sx = image.width / 1280, sy = image.height / 720;
+  const box = [Math.round(48 * sx), Math.round(661 * sy), Math.round(140 * sx), Math.round(27 * sy)];
+  const gray = grayMat(image), crop = gray.roi(new cv.Rect(...box));
+  const zoom = new cv.Mat(), padded = new cv.Mat(), rgba = new cv.Mat();
+  let png;
+  try {
+    cv.resize(crop, zoom, new cv.Size(280, 54), 0, 0, cv.INTER_CUBIC);
+    cv.normalize(zoom, zoom, 0, 255, cv.NORM_MINMAX);
+    cv.bitwise_not(zoom, zoom);
+    cv.copyMakeBorder(zoom, padded, 10, 10, 12, 12, cv.BORDER_CONSTANT, new cv.Scalar(255));
+    cv.cvtColor(padded, rgba, cv.COLOR_GRAY2RGBA);
+    png = PNG.sync.write({ width: rgba.cols, height: rgba.rows, data: rgba.data });
+  } finally {
+    rgba.delete(); padded.delete(); zoom.delete(); crop.delete(); gray.delete();
+  }
+  const { lines } = await readText({ png, client }, signal);
+  signal?.throwIfAborted();
+  const label = '已完成模拟作战';
+  if (lines.some(line => line.label.replace(/\s/g, '') === label)) return { source: 'OCR', label, box };
 }
 
 export function hasFacingPrompt(before, after, target) {
