@@ -299,6 +299,21 @@ export async function readWalletWithRetry(capture, signal, notify, pause = delay
   }
 }
 
+export async function waitForWalletModel(read, signal, notify, pause = delay) {
+  const intervals = [2, 5, 15];
+  for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted();
+    try { return await read(); }
+    catch (error) {
+      signal.throwIfAborted();
+      if (error.code !== 'MODEL_TEMPORARY') throw error;
+      const minutes = intervals[Math.min(attempt, intervals.length - 1)];
+      notify('模型连接仍未恢复，后台清单暂停操作。'+minutes+' 分钟后从新截图核对首页和账号。');
+      await pause(minutes * minute, undefined, { signal });
+    }
+  }
+}
+
 export async function verifyWalletAccount(capture, uid) {
   const first=await capture();
   if (!uid || first.uid===String(uid)) return first;
@@ -390,7 +405,7 @@ export async function runRewardStage(runCommand,options) {
   }
 }
 
-export async function runRewardQueue({filename, serial, device, config, runCommand, emit, signal}) {
+export async function runRewardQueue({filename, serial, device, config, runCommand, emit, signal, background = false}) {
   async function loadManifest() {
     const data = JSON.parse((await readFile(filename,'utf8')).replace(/^\uFEFF/,''));
     validateManifest(data,serial);
@@ -428,7 +443,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     if (!onStageEvent && result?.outcome==='ask') throw new Error(result.note || '游戏需要手动完成原账号登录。');
     return result?.note?.trim() || '未完成';
   };
-  const homeWallet = async observe => {
+  const readHomeWallet = async observe => {
     const capture = ()=>readWalletWithRetry(()=>captureWallet(device,config,signal),signal,notify);
     const read = ()=>verifyWalletAccount(capture,manifest.uid);
     try { return await read(); }
@@ -445,6 +460,9 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       return read();
     }
   };
+  const homeWallet = observe => background
+    ? waitForWalletModel(() => readHomeWallet(observe), signal, notify)
+    : readHomeWallet(observe);
   let wallet = await homeWallet();
   let restoredTarget;
   const imageFile = (id, type, preview) => writeFile(path.join(dir,id+'-'+type+'.jpg'),Buffer.from(preview.split(',')[1],'base64'));

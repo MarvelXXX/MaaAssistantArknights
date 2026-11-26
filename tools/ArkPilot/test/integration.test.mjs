@@ -27,7 +27,8 @@ test('后台首通在网页断开后保持唯一运行，新网页接收进度�
   t.after(()=>{ if (oldFile===undefined) delete process.env.ARK_REWARD_QUEUE; else process.env.ARK_REWARD_QUEUE=oldFile; });
   let runs=0, running;
   const app=await listen(createServer({getDevice:async()=>({}),getHome:async()=>null,
-    runQueue:async({signal,emit})=>{
+    runQueue:async({signal,emit,background})=>{
+      assert.equal(background,true);
       runs++;
       running={signal,emit};
       emit({type:'checkpoint',text:'首项开始'});
@@ -65,7 +66,8 @@ test('前台清单超过普通指令时限时仍返回实际错误',async t=>{
   process.env.ARK_REWARD_QUEUE='test-reward-manifest.json';
   t.after(()=>{ if (oldFile===undefined) delete process.env.ARK_REWARD_QUEUE; else process.env.ARK_REWARD_QUEUE=oldFile; });
   const app=await listen(createServer({getDevice:async()=>({}),getHome:async()=>null,
-    runQueue:async({signal})=>{
+    runQueue:async({signal,background})=>{
+      assert.equal(background,false);
       setupTimer.abort();
       assert.equal(signal.aborted,false);
       throw new Error('模型服务返回 HTTP 503。');

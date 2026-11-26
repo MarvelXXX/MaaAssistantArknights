@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dismissStoneRecovery, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail} from '../lib/reward-queue.mjs';
+import {dismissStoneRecovery, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForWalletModel} from '../lib/reward-queue.mjs';
 import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
 
 test('余额读取遇到临时断连时重新截图，错误凭据、离开首页和主动停止立即返回',async()=>{
@@ -24,6 +24,25 @@ test('余额读取遇到临时断连时重新截图，错误凭据、离开首�
   assert.deepEqual(waits.slice(-2),[10000,30000]);
   await assert.rejects(readWalletWithRetry(offline,controller.signal,()=>{},async()=>controller.abort()),{name:'AbortError'});
   assert.equal(count,4);
+});
+
+test('后台清单在长时间模型断连后重新从首页核账，保留停止和身份校验',async()=>{
+  const controller = new AbortController(), waits = [];
+  const offline = Object.assign(new Error('模型断连'), {code:'MODEL_TEMPORARY'});
+  const wallet = {prime:161,orundum:26678};
+  let reads = 0;
+  const recover = async () => { if (++reads <= 4) throw offline; return wallet; };
+  const pause = async (ms, _, options) => { assert.equal(options.signal,controller.signal); waits.push(ms); };
+  assert.equal(await waitForWalletModel(recover,controller.signal,()=>{},pause),wallet);
+  assert.deepEqual(waits,[120000,300000,900000,900000]);
+  for (const error of [new Error('UID 不符'), new Error('HTTP 401'), new Error('读数失败')]) {
+    await assert.rejects(waitForWalletModel(async()=>{throw error;},controller.signal,()=>{},pause),e=>e===error);
+  }
+  assert.equal(waits.length,4);
+  let cancelledReads = 0;
+  await assert.rejects(waitForWalletModel(async()=>{cancelledReads++;throw offline;},controller.signal,()=>{},
+    async()=>controller.abort()),{name:'AbortError'});
+  assert.equal(cancelledReads,1);
 });
 
 test('重试记录按上次结算状态展示旧截图，并兼容缺少上次状态的存档',()=>{

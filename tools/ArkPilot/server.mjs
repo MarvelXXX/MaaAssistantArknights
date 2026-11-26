@@ -393,7 +393,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         if (queue) {
           signal = job ? job.controller.signal : controller.signal;
           await runQueue({filename:queueFile, serial:data.serial,
-            device, config, runCommand, emit, signal});
+            device, config, runCommand, emit, signal, background:detached});
         } else {
           await runCommand({instruction, signal, emit, history:historyFrom(data.history), guide:attachedGuide, limit});
         }
