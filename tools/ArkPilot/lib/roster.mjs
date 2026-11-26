@@ -85,15 +85,20 @@ export function assess(plan,roster) {
 
 export function rosterFit(plan,roster) {
   const slots=assess(plan,roster), unconfirmedSlots=[], matched=[];
+  let missingSlot;
   const byTraining=(a,b)=>a.elite-b.elite || a.level-b.level;
   for (const slot of slots) {
     const known=slot.choices.filter(choice=>choice.status === '持有且满足已知要求');
-    if (!known.length) unconfirmedSlots.push(slot.slot);
+    if (!known.length) {
+      unconfirmedSlots.push(slot.slot);
+      // Maa checks the in-game box before borrowing, including operators absent from a partial scan.
+      if (slot.choices.length && slot.choices.every(choice=>choice.status==='未持有' || choice.status==='尚未识别')) missingSlot=slot.slot;
+    }
     const strongest=known.map(choice=>choice.training).filter(Boolean).sort(byTraining).at(-1);
     if (strongest) matched.push(strongest);
   }
   const leastTrained=matched.length === slots.length ? matched.sort(byTraining)[0] : undefined;
-  return {unconfirmedSlots,leastTrained};
+  return {unconfirmedSlots,leastTrained,supportSlot:unconfirmedSlots.length===1 ? missingSlot : undefined};
 }
 
 export async function adaptGuide(plan,roster,notes,propose) {

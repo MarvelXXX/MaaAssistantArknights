@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { PNG } from 'pngjs';
-import { adaptGuide, assess, normalizeRoster } from '../lib/roster.mjs';
+import { adaptGuide, assess, normalizeRoster, rosterFit } from '../lib/roster.mjs';
 import { searchWeb } from '../lib/research.mjs';
 import { decide } from '../lib/model.mjs';
 import { runAgent } from '../lib/agent.mjs';
@@ -30,6 +30,19 @@ test('名册区分未持有、未知、技能未解锁、专精未知与已记�
   assert.equal(await check(stats),'练度资料待补充');
   assert.equal(await check({...stats,skills:[{level:0},{level:0},{level:2}]}),'持有且满足已知要求');
   roster.complete = true; assert.equal(status({name:'芬'}),'未持有');
+});
+
+test('单个位置持有情况缺失时由 Maa 核对并可借助战，多个缺位和练度问题仍须适配',async()=>{
+  const roster=await normalizeRoster(box);
+  const fit=(names,group=false)=>rosterFit(group ? {groups:[{name:'狙击',opers:names}]} : {opers:names},roster);
+  assert.equal(rosterFit(author,roster).supportSlot,'能天使');
+  assert.equal(fit([{name:'能天使'}],true).supportSlot,'狙击');
+  assert.equal(fit([{name:'能天使'},{name:'芬'}],true).supportSlot,'狙击');
+  assert.equal(fit([{name:'能天使'},{name:'克洛丝'}],true).supportSlot,undefined);
+  assert.equal(fit([{name:'能天使'},{name:'克洛丝',skill:2}],true).supportSlot,undefined);
+  assert.equal(fit([{name:'克洛丝',skill:2}]).supportSlot,undefined);
+  roster.complete=true;
+  assert.equal(fit([{name:'能天使'},{name:'芬'}]).supportSlot,undefined);
 });
 
 test('适配改写真正的编队、组、部署和撤退，且保护原作业、地形和召唤依赖',async()=>{
@@ -146,4 +159,34 @@ test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无�
   assert.equal(devices,1); assert.equal(native.length,1);
   actions=['maa'];
   assert.match((await run({researchOnly:true})).at(-1).text,/只读/);
+});
+
+test('首通自动编队传递缺位助战，普通指令和未开启自动编队时保留原检查',async t=>{
+  const oldFile=process.env.ARK_REWARD_QUEUE;
+  process.env.ARK_REWARD_QUEUE='fixture.json';
+  t.after(()=>{if(oldFile===undefined) delete process.env.ARK_REWARD_QUEUE; else process.env.ARK_REWARD_QUEUE=oldFile;});
+  let turns=0;
+  const model=await listen(http.createServer((req,res)=>{
+    const action=turns++===0 ? {type:'maa',task:'Copilot'} : {type:'finish'};
+    res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({intent:'operate',goal:'核对首通',note:'核对作业',action})}}]}));
+  }),t);
+  const png=PNG.sync.write(new PNG({width:320,height:180})), runs=[];
+  const app=await listen(createServer({
+    getHome:async()=>'fixture',getDevice:async()=>({capture:async()=>({png,width:320,height:180,client:'com.hypergryph.arknights'})}),
+    native:async(a,options)=>runs.push(options),
+    runQueue:({runCommand,signal,emit})=>runCommand({instruction:'执行本关作业',guide:author,expectedStage:author.stage_name,limit:3,signal,emit}),
+  }),t);
+  async function send(instruction,formation) {
+    turns=0;
+    const res=await fetch(app+'/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      instruction,formation,guide:author,roster:box,url:model,model:'fixture',serial:'device',vision:true,
+    })});
+    return (await res.text()).trim().split('\n').map(JSON.parse);
+  }
+  assert.ok((await send('/首通清单',true)).some(e=>e.type==='applied' && e.action.task==='Copilot'));
+  assert.equal(runs[0].borrowSupport,true);
+  for (const [instruction,formation] of [['/首通清单',false],['执行本关作业',true]]) {
+    assert.ok((await send(instruction,formation)).some(e=>e.type==='research_error' && /名册/.test(e.text)));
+  }
+  assert.equal(runs.length,1);
 });

@@ -235,7 +235,7 @@ export async function paradoxNavigationPlan(plan, stage) {
   return {...plan,opers:[{name:matches[0].name,skill:[...skills][0]}]};
 }
 
-export async function executeMaa(action, { home, device, serial, guide, formation, signal, progress, prepare = false, afterStep }) {
+export async function executeMaa(action, { home, device, serial, guide, formation, borrowSupport, signal, progress, prepare = false, afterStep }) {
   const a = nativeAction(action, !!guide);
   return workspace(async work => {
     let params, stageTask;
@@ -265,6 +265,7 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
         params = a.task === 'ParadoxCopilot' ? {list:[filename]} : {filename};
       } else {
         params = {filename, formation:formation === true, loop_times:1, use_sanity_potion:false};
+        if (params.formation && borrowSupport === true) params.support_unit_usage = 1;
       }
     }
     const job = {home, work, type, params, stageTask, serial, prepare};

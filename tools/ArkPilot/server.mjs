@@ -249,8 +249,14 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             }
             const paradox = (a.task === 'Copilot' || a.task === 'ParadoxCopilot') && await paradoxStageId(guide);
             if (a.task === 'ParadoxCopilot' && !paradox) throw Object.assign(new Error('请先导入目标悖论模拟的作业。'),{beforeStart:true});
-            if (a.task === 'Copilot' && !paradox && !fixedTeam && (adaptationBlocked || roster && rosterFit(guide,roster).unconfirmedSlots.length)) {
-              throw Object.assign(new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。'),{beforeStart:true});
+            let supportSlot;
+            if (a.task === 'Copilot' && !paradox && !fixedTeam) {
+              const fit = roster && rosterFit(guide,roster);
+              if (queue && expectedStage && formation) supportSlot = fit?.supportSlot;
+              if (adaptationBlocked || (fit?.unconfirmedSlots.length && !supportSlot)) {
+                throw Object.assign(new Error('当前名册与作业尚未匹配，请先适配阵容或选择其他作业。'),{beforeStart:true});
+              }
+              if (supportSlot) emit({type:'core',text:'Maa 将核对编队位置 '+supportSlot+'，缺少时尝试使用助战干员。'});
             }
             const observer = new AbortController();
             const watching = AbortSignal.any([signal,observer.signal]);
@@ -287,7 +293,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             timer = setTimeout(updateFrame, 1500);
             try {
               if (guideId) onGuideStart?.(guideId);
-              return await native(a, {home,device,serial:data.serial,guide,formation,afterStep,signal:watching,progress:text=>{
+              return await native(a, {home,device,serial:data.serial,guide,formation,borrowSupport:!!supportSlot,afterStep,signal:watching,progress:text=>{
                 phase = text;
                 emit({type:'core',text});
               }});
