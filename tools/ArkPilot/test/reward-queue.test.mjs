@@ -1,6 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {dismissStoneRecovery, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, rewardWalletContext, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForWalletModel} from '../lib/reward-queue.mjs';
+
+test('凭证兑换同时核对两项余额、扣券量与库存，不重复记作免费领取或首通',()=>{
+  for (const lots of [1,95]) {
+    const t={id:'exchange',label:'情报凭证',currency:'orundum',amount:100*lots,requires:[],intelExchange:{lots,tickets:1905,stock:864}};
+    const before={prime:12,orundum:55},after={prime:12,orundum:55+t.amount};
+    const note='兑换已核，情报凭证 1905→'+(1905-lots*20)+'，商品库存 864→'+(864-lots);
+    assert.equal(reconcileReward(t,note,before,after),'兑换已核');
+    assert.equal(reconcileReward(t,note,before,before),'余额待复核');
+    assert.equal(reconcileReward(t,note,before,{...after,prime:11}),'余额下降');
+    assert.equal(reconcileReward(t,note.replace('864','865'),before,after),'余额待复核');
+    assert.equal(reconcileReward(t,note.replace('1905','1904'),before,after),'余额待复核');
+    assert.equal(reconcileReward(t,'领取已核',before,after),'余额待复核');
+    const ledger={items:{exchange:{status:'兑换已核',at:'2026-11-26T00:00:00Z',after,exchangeStock:true}}};
+    assert.equal(selectRewardTarget([t],ledger,0),undefined);
+    assert.match(renderProgress({targets:[t]},ledger),/首通 0 项、领取免费奖励 0 项、核实凭证兑换 1 项/);
+  }
+});
 import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
 
 test('同关重试锚定当轮起点，恢复中断保留原始起点及最新余额', () => {

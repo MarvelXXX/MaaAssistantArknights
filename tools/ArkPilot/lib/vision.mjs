@@ -113,6 +113,14 @@ export async function recognize(frame, signal) {
   const image = pixels(frame.png);
   const [templates, ocr] = await Promise.all([matchTemplates(image, frame.client), readText(frame, signal)]);
   signal?.throwIfAborted();
+  const shopLabels = ocr.lines.map(a=>a.label.replace(/\s/g,''));
+  if (Math.abs(image.width/image.height-16/9)<0.015 && shopLabels.includes('合成玉') &&
+      (shopLabels.includes('购买物品') || shopLabels.some(s=>s.includes('关于情报凭证区')))) {
+    const box=[1338,24,97,38].map((n,i)=>Math.round(n*(i%2 ? image.height/810 : image.width/1440)));
+    const lines=await readCrop(image,box,'com.YoStarEN.Arknights',signal);
+    const value=lines.map(line=>line.label).join('').replace(/\s/g,'');
+    if (/^\d{1,8}$/.test(value)) ocr.lines.push({source:'OCR',label:value,box});
+  }
   if (templates.anchors.some(a => a.label === '悖论模拟开始按钮') &&
       ocr.lines.some(line => line.label === '悖论模拟') &&
       !ocr.lines.some(line => line.label.replace(/[\s\p{P}\p{S}]/gu, '') === '已完成模拟作战')) {
@@ -131,15 +139,32 @@ export async function recognize(frame, signal) {
   } finally { rgba.delete(); small.delete(); }
 }
 
+export function intelShopStock(frame, tickets, stock) {
+  const labels=frame.anchors.map(a=>a.label.replace(/\s/g,''));
+  if (!labels.includes('合成玉') || !frame.anchors.some(a=>a.label.trim()===String(tickets) && a.box &&
+      a.box[0]/frame.width>0.92 && a.box[1]/frame.height<0.085)) return false;
+  if (labels.includes('购买物品')) return labels.includes('剩余'+stock) && labels.includes('售价20');
+  if (!labels.some(s=>s.includes('关于情报凭证区'))) return false;
+  return frame.anchors.some(a=>a.box && a.box[0]/frame.width>0.29 && a.box[0]/frame.width<0.39 &&
+    a.box[1]/frame.height>0.245 && a.box[1]/frame.height<0.31 &&
+    new RegExp('余'+stock+'(?!\\d)').test(a.label.replace(/\s/g,'')));
+}
+
 // The completion text in the lower left is grey on black; exclude the adjoining checkmark.
 async function readParadoxCompletion(image, client, signal) {
   const sx = image.width / 1280, sy = image.height / 720;
   const box = [Math.round(48 * sx), Math.round(661 * sy), Math.round(140 * sx), Math.round(27 * sy)];
+  const lines=await readCrop(image,box,client,signal);
+  const label = '已完成模拟作战';
+  if (lines.some(line => line.label.replace(/\s/g, '') === label)) return { source: 'OCR', label, box };
+}
+
+async function readCrop(image, box, client, signal) {
   const gray = grayMat(image), crop = gray.roi(new cv.Rect(...box));
   const zoom = new cv.Mat(), padded = new cv.Mat(), rgba = new cv.Mat();
   let png;
   try {
-    cv.resize(crop, zoom, new cv.Size(280, 54), 0, 0, cv.INTER_CUBIC);
+    cv.resize(crop, zoom, new cv.Size(Math.round(54*box[2]/box[3]),54), 0, 0, cv.INTER_CUBIC);
     cv.normalize(zoom, zoom, 0, 255, cv.NORM_MINMAX);
     cv.bitwise_not(zoom, zoom);
     cv.copyMakeBorder(zoom, padded, 10, 10, 12, 12, cv.BORDER_CONSTANT, new cv.Scalar(255));
@@ -150,8 +175,7 @@ async function readParadoxCompletion(image, client, signal) {
   }
   const { lines } = await readText({ png, client }, signal);
   signal?.throwIfAborted();
-  const label = '已完成模拟作战';
-  if (lines.some(line => line.label.replace(/\s/g, '') === label)) return { source: 'OCR', label, box };
+  return lines;
 }
 
 export function hasFacingPrompt(before, after, target) {

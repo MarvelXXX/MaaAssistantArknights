@@ -1,9 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runAgent, validateDecision } from '../lib/agent.mjs';
+import { intelCheckout, runAgent, validateDecision } from '../lib/agent.mjs';
 
 const frame = { width: 1600, height: 900, anchors: [{ id: 3, box: [600, 50, 90, 40] }], png: Buffer.from('frame') };
 const answer = action => ({ intent: 'operate', goal: '打开任务界面', note: '检查任务入口', action });
+test('情报凭证订单逐帧核实付款币种、总价、库存及余额，每单仅提交一次',async()=>{
+  const width=1440,height=810,image={width,height,data:Buffer.alloc(width*height*4)};
+  for (const [left,top,w,h] of [[1019,224,28,40],[1036,568,19,27]]) {
+    for (let y=top+Math.ceil(h/3);y<top+h;y++) {
+      for (let x=left;x<left+w;x++) image.data.set([155,152,255],4*(y*width+x));
+    }
+  }
+  const order={lots:95,stock:864,tickets:1905};
+  const labels=['合成玉','售价 20','×100','购买数量','剩余 864','总计支付 1900','购买物品'];
+  const anchors=[...labels.map(label=>({label})),{label:'1905',box:[1340,25,90,30]}];
+  const detail={width,height,image,anchors,png:Buffer.from('shop')};
+  const button={type:'tap',x:1040,y:650};
+  assert.equal(intelCheckout(detail,button,order,false),true);
+  for (const changed of [{...order,lots:1},{...order,stock:865},{...order,tickets:1900},{...order,auditOnly:true}]) {
+    assert.throws(()=>intelCheckout(detail,button,changed,false),/未提交/);
+  }
+  assert.throws(()=>intelCheckout(detail,button,order,true),/未提交/);
+  const wrongTender={...detail,image:{width,height,data:Buffer.alloc(width*height*4,200)}};
+  assert.throws(()=>intelCheckout(wrongTender,button,order,false),/未提交/);
+  const f=fixture([{type:'tap',x:722,y:803}],{intelExchange:order,
+    observe:async()=>f.emitted.some(e=>e.type==='decision') ? wrongTender : detail});
+  await assert.rejects(runAgent(f.params),/未提交/);
+  assert.equal(f.inputs.length,0);
+});
 test('动作按当前截图坐标映射，只接受当前帧的识别目标', () => {
   const parse = (a, readOnly = false, vision = true) => validateDecision(answer(a), frame, readOnly, vision).action;
   assert.deepEqual(parse({ type: 'tap', x: 1000, y: 0 }), { type: 'tap', x: 1599, y: 0 });

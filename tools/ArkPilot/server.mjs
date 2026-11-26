@@ -240,7 +240,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         const home = await getHome();
         if (config) config.model = await chooseModel(config, setupSignal);
         const emit = job ? job.emit : eventStream(res);
-        async function runCommand({instruction, signal, emit, history = [], guide = null, guideId, onGuideStart, resumeAfterStep, limit, expectedStage, allowNative = true, fixedTeam = false}) {
+        async function runCommand({instruction, signal, emit, history = [], guide = null, guideId, onGuideStart, resumeAfterStep, limit, expectedStage, intelExchange, allowNative = true, fixedTeam = false}) {
           let adaptationBlocked = false;
           let formation = !fixedTeam && data.formation === true;
           const runNative = async (a, afterStep) => {
@@ -387,7 +387,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             await runNative({type:'maa',task:'Copilot'},step);
             return 'Maa 已执行后续作业，请核对同一局的结算。';
           } : undefined;
-          await runAgent({ config, device, instruction, history, continueBattle, retryModel:queue, requireAdaptation:queue ? false : undefined,
+          await runAgent({ config, device, instruction, history, continueBattle, intelExchange, retryModel:queue, requireAdaptation:queue ? false : undefined,
             readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home && allowNative ? runNative : null });
         }
         if (queue) {

@@ -4,11 +4,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
 import { decide } from './model.mjs';
-import { recognize } from './vision.mjs';
+import { intelShopStock, recognize } from './vision.mjs';
 import { checkPlan, importGuide, matchesRewardStage, stageAliases } from './guides.mjs';
 
 const minute = 60000;
-const closed = new Set(['首通已核', '领取已核', '原已完成']);
+const closed = new Set(['首通已核', '领取已核', '兑换已核', '原已完成']);
 const spendRule = '禁止消耗源石或合成玉，禁止兑换、充值、寻访、购买理智或切换账号。优先自然理智。仅在确认扣除的是库存理智药、源石用量为零时可用药，优先即将过期的药。';
 
 function stoneRecovery(anchors) {
@@ -41,6 +41,13 @@ function validateManifest(manifest, serial) {
     if (t.retryGuideIds != null && (!Array.isArray(t.retryGuideIds) || t.retryGuideIds.length>20 ||
         t.retryGuideIds.some(id=>typeof id!=='string' || !/^[1-9]\d{0,9}$/.test(id)))) throw new Error('备选作业号无效。');
     if (t.plan) t.plan = checkPlan(t.plan);
+    if (t.intelExchange != null) {
+      const {lots,tickets,stock} = t.intelExchange;
+      if (![lots,tickets,stock,lots*100].every(Number.isSafeInteger) || lots < 1 || tickets < lots*20 || stock < lots ||
+          t.currency !== 'orundum' || t.amount !== lots*100 || t.ap !== 0 || t.stage || t.claimAvailable || t.plan || t.guideId) {
+        throw new Error('情报凭证兑换需要确切的份数、库存、凭证余额和对应的合成玉数量。');
+      }
+    }
     if (t.resumeAfterStep != null && (!t.fixedTeam || !t.stage || !Number.isInteger(t.resumeAfterStep) ||
         t.resumeAfterStep<1 || t.resumeAfterStep>=24)) throw new Error('教学续打需要固定队、关卡和有效的作业步骤。');
     if (t.revision != null && (!Number.isSafeInteger(t.revision) || t.revision<1)) throw new Error('攻略修订号无效。');
@@ -122,6 +129,16 @@ export function reconcileReward(target, report, before, after) {
   if (after.prime < before.prime || after.orundum < before.orundum) return '余额下降';
   const delta = after[target.currency] - before[target.currency];
   const receivedCurrency = after.prime > before.prime || after.orundum > before.orundum;
+  if (target.intelExchange) {
+    const {lots,tickets,stock} = target.intelExchange;
+    const text = report.replace(/[\s,，]/g,'');
+    const evidence = text.match(/情报凭证(\d+)→(\d+).*?商品库存(\d+)→(\d+)/u);
+    const verified = evidence && Number(evidence[1])===tickets && Number(evidence[2])===tickets-lots*20 &&
+      Number(evidence[3])===stock && Number(evidence[4])===stock-lots;
+    if (report.startsWith('兑换已核') && verified && after.prime===before.prime && delta===target.amount) return '兑换已核';
+    if (receivedCurrency || report.startsWith('兑换已核')) return '余额待复核';
+    return report.startsWith('模型待重试') ? '模型待重试' : '未完成';
+  }
   const claim = target.claimAvailable === true;
   const changed = claim ? receivedCurrency : delta !== 0;
   const reported = report.startsWith('首通已核') || (claim && report.startsWith('领取已核'));
@@ -345,12 +362,14 @@ export function renderProgress(manifest, ledger) {
   const rows = Object.entries(ledger.items).filter(([id])=>titles.has(id));
   const cleared = rows.filter(([,r])=>r.status==='首通已核').length;
   const claimed = rows.filter(([,r])=>r.status==='领取已核').length;
+  const exchanged = rows.filter(([,r])=>r.status==='兑换已核').length;
   const prior = rows.filter(([,r])=>r.status==='原已完成').length;
   const current = rows.find(([,r])=>r.status==='进行中');
   const finished = rows.filter(([,r])=>r.at).sort((a,b)=>b[1].at.localeCompare(a[1].at));
   const latest = finished[0]?.[1]?.after || current?.[1]?.before;
   const lines = ['# 首通执行记录','',
-    '清单共 '+manifest.targets.length+' 项，其中本次确认首通 '+cleared+' 项、领取免费奖励 '+claimed+' 项，已完成或已无可领奖励 '+prior+' 项。',
+    '清单共 '+manifest.targets.length+' 项，其中本次确认首通 '+cleared+' 项、领取免费奖励 '+claimed+' 项'+
+      (exchanged ? '、核实凭证兑换 '+exchanged+' 项' : '')+'，已完成或已无可领奖励 '+prior+' 项。',
     '', '最近核对的首页余额为 '+(latest ? latest.prime+' 源石、'+latest.orundum+' 合成玉。':'待核。'),
     '',current ? '最近开始核查的目标为 '+titles.get(current[0])+'。':'各项状态见下表。',
     '', '| 时间（北京时间） | 关卡 | 核验结果 | 源石 | 合成玉 |','| --- | --- | --- | ---: | ---: |'];
@@ -361,6 +380,7 @@ export function renderProgress(manifest, ledger) {
     const label = {result:'结算画面',stage:'战后关卡'}[row.evidence];
     let proofLink = label ? ' · ['+label+']('+encodeURIComponent(id+'-'+row.evidence+'.jpg')+')' : '';
     if (row.detailVerifiedAt) proofLink+=' · [复核关卡]('+encodeURIComponent(id+'-detail.jpg')+')';
+    if (row.exchangeStock) proofLink+=' · [兑换后库存]('+encodeURIComponent(id+'-stock.jpg')+')';
     lines.push('| '+at+' | '+titles.get(id)+' | '+walletLink+proofLink+' | '+row.after.prime+' | '+row.after.orundum+' |');
   }
   return lines.join('\n')+'\n';
@@ -441,9 +461,9 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await rename(report+'.tmp',report);
   };
   const notify = text => emit({type:'checkpoint',text});
-  const play = async (instruction, {limit, onStageEvent, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative = true, fixedTeam = false}, observe = onStageEvent) => {
+  const play = async (instruction, {limit, onStageEvent, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, intelExchange, allowNative = true, fixedTeam = false}, observe = onStageEvent) => {
     let result;
-    const options={instruction, limit, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
+    const options={instruction, limit, ap, expectedStage, guide, guideId, onGuideStart, resumeAfterStep, intelExchange, allowNative, fixedTeam, signal:AbortSignal.any([signal,AbortSignal.timeout(35*minute)]), emit:e=>{
       if (e.type === 'end') { result = e; return; }
       observe?.(e);
       emit(e);
@@ -571,14 +591,23 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     await save();
     notify(t.label+'，第 '+attempts+' 次核查。');
     const paradoxName = t.stage?.startsWith('mem_') ? (await stageAliases(t.stage)).row?.name : undefined;
-    const evidence = rewardEvidence(t.stage,t.claimAvailable,paradoxName);
+    const evidence = rewardEvidence(t.stage,t.claimAvailable || !!t.intelExchange,paradoxName);
+    let stockProof;
+    const observeStage = event => {
+      evidence.observe(event);
+      const order=t.intelExchange;
+      if (order && event.type==='frame' && event.preview && intelShopStock(event,order.tickets-20*order.lots,order.stock-order.lots)) {
+        stockProof=event.preview;
+      }
+    };
     let report, usedGuide;
     const offered = new Set(previous.offeredGuideIds || []);
     const failed = failedGuides(previous);
     const credited = previous.status==='进行中' && wallet[t.currency]-before[t.currency]===t.amount;
     let caution = '';
     if (previous.status === '进行中') {
-      if (t.claimAvailable) caution = '上轮中断，先核实本项是否已领取，以及是否还有未领取档位。';
+      if (t.intelExchange) caution = '上轮中断，先核对当前凭证余额及商品库存。';
+      else if (t.claimAvailable) caution = '上轮中断，先核实本项是否已领取，以及是否还有未领取档位。';
       else caution = credited ? '上次中断后余额已增加对应金额。仅去本关详情核对完成标志，不得再次开战。' : '上轮中断，务必先核对本关已领取状态。';
     }
     const walletContext = rewardWalletContext(before,wallet,previous.note);
@@ -596,14 +625,28 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       const source = candidate ? '（PRTS #'+candidate+'）' : '';
       const loaded = guide ? '已按真实关号载入作业'+source+'。优先用当前附件；如果名册、技能或练度不符，开战前可直接用 adapt_guide 换人，或用 find_guide 查找本关其他作业再 load_guide。若适配失败仍可换作业。' : '';
       const annihilation = t.stage?.startsWith('camp_') ? '本项核查剿灭数的一次性奖励。旧剿灭的剿灭战模拟也可打进度奖励。先在情报汇总核对档位、开启时间和开始行动按钮。周报酬已满或当前委托是另一张地图仍可打已开放的模拟。' : '';
-      const instructions = t.claimAvailable
+      let instructions = t.claimAvailable
         ? '在指定入口领取免费奖励。任务有连续档位时，收取当前已完成的任务活跃度，确认随附物资，再查看新出现的可领档位，直到目标货币到账或确无可领进度。记录目标货币数量和领取画面并返回首页。finish 用“领取已核”报告目标奖励到账，用“原已完成”报告此前已领或入口已清空。尚未达标时用“未完成”并写出实际剩余条件。'
         : (failed.size ? '更换失败的作业或阵容。' : '')+
           '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。若理智不足且画面可读，请写“理智不足，当前理智 X，关卡需 Y”。';
-      report = await play('本轮只处理 '+t.label+'。'+walletContext+caution+t.route+'。'+avoid+loaded+annihilation+instructions+spendRule,{
+      let spending = spendRule;
+      if (t.intelExchange) {
+        const {lots,tickets,stock} = t.intelExchange;
+        spending = '禁止消耗源石或合成玉、充值、寻访、付费恢复理智或切换账号。';
+        instructions = '只在紫色 RE 情报凭证区购买合成玉，每份100，固定单价20张情报凭证。提交前实查当前凭证余额为 '+tickets+
+          '、该商品剩余 '+stock+' 份；若不符，只核对现状并回首页。商品详情必须核对合成玉、紫色 RE 付款图标、份数 '+lots+
+          ' 和应付 '+(lots*20)+'，均一致方可确认一次。遇到其他币种、价格或无法辨认，关闭页面。'+
+          '取得后观察获得物资，再打开同一商品详情取一帧核实剩余凭证与库存，再关闭回首页。finish 用实际值按“兑换已核，情报凭证 A→B，商品库存 C→D”报告。'+
+          '若是中断恢复且凭证或库存已变，只对账，不重新提交。';
+        if (before.prime!==wallet.prime || before.orundum!==wallet.orundum) {
+          instructions = '当前余额已经变化，只查看情报凭证余额和商品库存，禁止购买。核实此前兑换时按“兑换已核，情报凭证 A→B，商品库存 C→D”报告，回首页。';
+        }
+      }
+      report = await play('本轮只处理 '+t.label+'。'+walletContext+caution+t.route+'。'+avoid+loaded+annihilation+instructions+spending,{
           limit:75, ap:t.ap, expectedStage:t.stage, guide, guideId:guide ? candidate : undefined, onGuideStart:id=>{usedGuide=id;},
-          resumeAfterStep:t.resumeAfterStep, allowNative:!credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
-          onStageEvent:evidence.observe,
+          resumeAfterStep:t.resumeAfterStep, allowNative:!t.intelExchange && !credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
+          intelExchange:t.intelExchange && {...t.intelExchange,auditOnly:before.prime!==wallet.prime || before.orundum!==wallet.orundum},
+          onStageEvent:observeStage,
         });
     } catch (error) {
       signal.throwIfAborted();
@@ -620,8 +663,14 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     restoredTarget=undefined;
     wallet = await homeWallet(evidence.observe);
     // An interrupted successful battle may already have been credited on this run's first frame.
-    if (!t.claimAvailable && previous.status === '进行中' && report.startsWith('原已完成') &&
+    if (!t.claimAvailable && !t.intelExchange && previous.status === '进行中' && report.startsWith('原已完成') &&
         wallet[t.currency]-before[t.currency] === t.amount) report = '首通已核（中断后复核） '+report;
+    if (t.intelExchange) {
+      const {tickets,stock,lots}=t.intelExchange;
+      if (stockProof && wallet.prime===before.prime && wallet.orundum-before.orundum===t.amount) {
+        report='兑换已核，情报凭证 '+tickets+'→'+(tickets-lots*20)+'，商品库存 '+stock+'→'+(stock-lots)+'。'+report;
+      } else if (!stockProof && report.startsWith('兑换已核')) report='尚未识别兑换后库存。'+report;
+    }
     let status = reconcileReward(t,report,before,wallet);
     if (status==='余额待复核' && evidence.best) {
       const verified = await rewardReceipt(t,before,wallet,evidence.best.anchors);
@@ -632,6 +681,10 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     }
     await imageFile(t.id,'home',wallet.image);
     const row = ledger.items[t.id] = {status,attempts,before,after:numbers(wallet),started:ledger.items[t.id].started,note:report,at:new Date().toISOString()};
+    if (stockProof) {
+      await imageFile(t.id,'stock',stockProof);
+      row.exchangeStock=true;
+    }
     if (evidence.best && needsParadoxVisit(t,row,evidence.best.anchors)) visits.push(t);
     if (evidence.best) {
       await imageFile(t.id,evidence.best.kind,evidence.best.preview);

@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { hasFacingPrompt, recognize, sameReadyOperator, stillMatches } from './vision.mjs';
+import { hasFacingPrompt, intelShopStock, recognize, sameReadyOperator, stillMatches } from './vision.mjs';
 import { deploymentTarget } from './guides.mjs';
 import { decide } from './model.mjs';
 import { nativeAction } from './maa.mjs';
@@ -12,6 +12,43 @@ function premiumConfirmation(frame) {
   if (frame.anchors.some(anchor => anchor.source === 'Maa' && anchor.label === '源石恢复提示')) return true;
   const text = labels.join('').replace(/\s/g, '');
   return /(?:是否|确认|确定)(?:要|将|继续)?(?:花费|消耗|使用|用)[^。！？]{0,24}(?:源石|合成玉)|(?:是否|确认|确定)[^。！？]{0,12}源石[^。！？]{0,12}兑换[^。！？]{0,12}合成玉/u.test(text);
+}
+
+// Sample the purple RE ticket on the 16:9 CN shop layout. Both price lines must show it.
+function hasIntelTicket(image, left, top, width, height) {
+  if (!image || Math.abs(image.width / image.height - 16 / 9) > 0.015) return false;
+  function purple(x,y) {
+    const col = Math.floor((left + x*width)*image.width/1440);
+    const row = Math.floor((top + y*height)*image.height/810);
+    const i = 4*(row*image.width+col);
+    const [r,g,b] = image.data.subarray(i,i+3);
+    return r>80 && b-r>35 && b-g>38;
+  }
+  return [[0.15,0.46],[0.45,0.46],[0.75,0.46],[0.75,0.61],[0.75,0.78]].every(([x,y])=>purple(x,y)) &&
+    !purple(0.65,0.12) && !purple(0.85,0.12);
+}
+
+export function intelCheckout(frame, action, order, submitted) {
+  if (!['tap','swipe','deploy','maa'].includes(action.type)) return false;
+  const labels = frame.anchors.map(a=>a.label.replace(/\s/g,''));
+  const x = action.x/frame.width, y = action.y/frame.height;
+  const button = frame.anchors.some(a=>/购买物品/.test(a.label) && a.box &&
+    action.x>=a.box[0] && action.x<=a.box[0]+a.box[2] && action.y>=a.box[1] && action.y<=a.box[1]+a.box[3]);
+  const inButton = x>=0.62 && x<=0.815 && y>=0.765 && y<=0.85;
+  const checkout = labels.some(s=>/购买物品|购买数量|总计支付/.test(s));
+  if (!checkout && labels.some(s=>/^(?:确定|确认|确认购买|立即购买|支付)$/.test(s)) && !labels.includes('获得物资')) {
+    throw new Error('情报凭证任务遇到无法核实付款币种的确认框。');
+  }
+  if (!button && !inButton) return false;
+  if (!checkout && labels.includes('获得物资')) return false;
+  const {lots,tickets,stock} = order;
+  const exact = ['购买数量','总计支付'+(20*lots),'购买物品'];
+  if (action.type!=='tap' || submitted || order.auditOnly || !inButton || !exact.every(s=>labels.includes(s)) ||
+      !intelShopStock(frame,tickets,stock) || !labels.some(s=>/^[x×]100$/i.test(s)) ||
+      !hasIntelTicket(frame.image,1019,224,28,40) || !hasIntelTicket(frame.image,1036,568,19,27)) {
+    throw new Error('情报凭证付款核验未通过，未提交购买。');
+  }
+  return true;
 }
 // An explicit request for a runnable adaptation is fulfilled by the attached plan.
 // Explanations, hypothetical questions and prohibitions stay with the planner.
@@ -125,11 +162,12 @@ async function deployFromGuide(action, guide, frame, device, signal, pause) {
 }
 
 export async function runAgent({ config, device, instruction, history, readOnly, limit, signal, emit,
-  runNative, guidance, lookupGuide, continueBattle, retryModel = false, requireAdaptation = wantsAdaptedPlan(instruction),
+  runNative, guidance, lookupGuide, continueBattle, intelExchange, retryModel = false, requireAdaptation = wantsAdaptedPlan(instruction),
   observe = recognize, plan = decide, matches = stillMatches, pause = (ms, s) => delay(ms, undefined, { signal: s }) }) {
   const steps = [];
   const attemptedTasks = new Set();
   const protectsCurrency = noPremiumSpend.test(instruction);
+  let submittedExchange = false;
   let adaptation, rejectedInput, modelRetries = 0;
   let staleCount = 0, actionCount = 0, previousInput, identicalInputs = 0;
   const recent = () => steps.length <= 18 ? steps : [...steps.slice(0, 3), ...steps.slice(-15)];
@@ -190,6 +228,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       return;
     }
     if (actionCount >= limit) throw new Error('已达到本次动作上限，目标尚未确认完成。');
+    const buying = intelExchange && intelCheckout(frame,action,intelExchange,submittedExchange);
     emit({ type: 'decision', action, note, goal, turn });
     if (researchTools.has(action.type)) {
       let result;
@@ -253,6 +292,14 @@ export async function runAgent({ config, device, instruction, history, readOnly,
           continue;
         }
       } else {
+        if (buying) {
+          const fresh = await observe(current,signal);
+          if (!intelCheckout(fresh,action,intelExchange,submittedExchange) || premiumConfirmation(fresh)) {
+            throw new Error('购买前的实时凭证或价格已变化，已停止输入。');
+          }
+          signal.throwIfAborted();
+          submittedExchange = true;
+        }
         await device.input(action, signal);
       }
       previousInput = { signature, png: frame.png };
