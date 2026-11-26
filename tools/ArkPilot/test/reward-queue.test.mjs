@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dismissStoneRecovery, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
+import {dismissStoneRecovery, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail} from '../lib/reward-queue.mjs';
 import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
 
 test('余额读取遇到临时断连时重新截图，错误凭据、离开首页和主动停止立即返回',async()=>{
@@ -89,6 +89,33 @@ test('突袭首次掉落只由同关突袭结算徽记、首次掉落及对应�
   evidence.observe({type:'frame',preview:'first',anchors:[badge]});
   evidence.observe({type:'frame',preview:'receipt',anchors});
   assert.equal(evidence.best.preview,'receipt');
+});
+
+test('无名悖论首通结算只在精确到账时回看详情，看到开始按钮便停止输入',async()=>{
+  const target={stage:'mem_ansel_1',label:'安赛尔「冷静的支援者」',amount:200,currency:'orundum'};
+  const row={status:'余额待复核',before:{prime:160,orundum:26278},after:{prime:160,orundum:26478}};
+  const stars={source:'Maa',label:'结算三星标志'}, drop={source:'OCR',label:'首次掉落'};
+  assert.ok(needsParadoxVisit(target,row,[stars,drop]));
+  for (const anchors of [[stars],[drop],[]]) assert.ok(!needsParadoxVisit(target,row,anchors));
+  for (const after of [row.before,{prime:161,orundum:26478},{prime:160,orundum:26678}])
+    assert.ok(!needsParadoxVisit(target,{...row,after},[stars,drop]));
+  assert.ok(!needsParadoxVisit(target,{...row,status:'首通已核'},[stars,drop]));
+  const start={source:'Maa',label:'悖论模拟开始按钮'};
+  const ocr=label=>({source:'OCR',label});
+  const anchors=[start,ocr('悖论模拟'),ocr('冷静的支援者'),ocr('已完成模拟作战')];
+  const inspect=screen=>visitParadoxDetail(async({emit,allowNative,signal})=>{
+    assert.equal(allowNative,false);
+    emit({type:'frame',anchors:[ocr('干员')],preview:'home'});
+    signal.throwIfAborted();
+    emit({type:'frame',anchors:screen,preview:'proof'});
+    assert.ok(signal.aborted);
+    signal.throwIfAborted();
+  },target,'冷静的支援者',new AbortController().signal,()=>{});
+  assert.equal(await inspect(anchors),'proof');
+  assert.equal(await inspect(anchors.filter(a=>a.label!=='冷静的支援者')),undefined);
+  assert.equal(await inspect(anchors.filter(a=>a.label!=='已完成模拟作战')),undefined);
+  assert.equal(await inspect([...anchors,ocr('公开招募'),ocr('采购中心')]),undefined);
+  assert.equal(await inspect([{source:'Maa',label:'源石恢复提示'}]),undefined);
 });
 
 test('悖论总结中断后用本关已完成的截图与独立余额核账', async () => {

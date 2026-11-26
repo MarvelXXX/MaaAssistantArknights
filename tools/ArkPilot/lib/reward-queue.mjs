@@ -162,17 +162,52 @@ function receivedItem(anchors, name, amount) {
 function completedParadox(anchors, name) {
   if (!name || !anchors.some(a=>a.source==='Maa' && a.label==='悖论模拟开始按钮')) return false;
   const words = anchors.filter(a=>a.source==='OCR').map(a=>a.label.replace(/\s/g,''));
+  if (words.includes('公开招募') && words.some(word=>/采购中心|干员寻访|档案/.test(word))) return false;
   return words.includes('悖论模拟') && words.includes(name.replace(/\s/g,'')) &&
     words.some(word=>word.replace(/^[\p{P}\p{S}]+/u,'')==='已完成模拟作战');
+}
+
+function paradoxCredit(target, before, after) {
+  return !target.claimAvailable && target.stage?.startsWith('mem_') && target.currency==='orundum' && target.amount===200 &&
+    Number.isSafeInteger(before?.prime) && Number.isSafeInteger(before?.orundum) &&
+    after?.prime===before.prime && after.orundum===before.orundum+200;
+}
+
+export function needsParadoxVisit(target, row, anchors) {
+  return row.status==='余额待复核' && paradoxCredit(target,row.before,row.after) &&
+    anchors.some(a=>a.source==='Maa' && a.label==='结算三星标志') &&
+    anchors.some(a=>a.source==='OCR' && a.label.replace(/\s/g,'')==='首次掉落');
+}
+
+export async function visitParadoxDetail(runCommand, target, name, signal, emit) {
+  const stopped = new AbortController();
+  let detail;
+  try {
+    await runCommand({instruction:'只核对 '+target.label+' 的悖论模拟完成状态。从首页进入干员列表、干员本人、档案、悖论模拟，停在详情页即可。禁止开战、养成、消费、领取任何物品或切换账号。'+spendRule,
+      limit:24,allowNative:false,signal:AbortSignal.any([signal,stopped.signal,AbortSignal.timeout(8*minute)]),
+      emit:event=>{
+        if (event.type!=='end') emit(event);
+        if (event.type!=='frame') return;
+        const anchors=event.anchors;
+        // Stop on the detail screen before the planner can tap Start, even for a different operator.
+        const start=anchors.some(a=>a.source==='Maa' && a.label==='悖论模拟开始按钮');
+        const detailText=anchors.some(a=>a.source==='OCR' && a.label.includes('开始模拟'));
+        if (!start && !detailText && !stoneRecovery(anchors)) return;
+        if (completedParadox(anchors,name)) detail=event.preview;
+        stopped.abort();
+      }});
+  } catch (error) {
+    signal.throwIfAborted();
+    if (!stopped.signal.aborted) throw error;
+  }
+  return detail;
 }
 
 export async function rewardReceipt(target, before, after, anchors) {
   if (!target.claimAvailable) {
     if (await verifiedFirstDrop(target,before,after,anchors))
       return {status:'首通已核',note:'首通已核：本关结算截图的关号、关名、难度对应的胜利标志与首次掉落标记吻合，同一轮首页源石增加 1，合成玉持平。'};
-    if (target.stage?.startsWith('mem_') && target.currency==='orundum' && target.amount===200 &&
-        Number.isSafeInteger(before?.prime) && Number.isSafeInteger(before?.orundum) &&
-        after?.prime===before.prime && after.orundum===before.orundum+200) {
+    if (paradoxCredit(target,before,after)) {
       const {row} = await stageAliases(target.stage);
       if (row?.stageId===target.stage && row.levelId.startsWith('obt/memory/') &&
           completedParadox(anchors,row.name))
@@ -287,7 +322,8 @@ export function renderProgress(manifest, ledger) {
     const result = row.status === '进行中' ? (row.lastStatus || '上次核查') : row.status;
     const walletLink = '['+result+']('+encodeURIComponent(id+'-home.jpg')+')';
     const label = {result:'结算画面',stage:'战后关卡'}[row.evidence];
-    const proofLink = label ? ' · ['+label+']('+encodeURIComponent(id+'-'+row.evidence+'.jpg')+')' : '';
+    let proofLink = label ? ' · ['+label+']('+encodeURIComponent(id+'-'+row.evidence+'.jpg')+')' : '';
+    if (row.detailVerifiedAt) proofLink+=' · [复核关卡]('+encodeURIComponent(id+'-detail.jpg')+')';
     lines.push('| '+at+' | '+titles.get(id)+' | '+walletLink+proofLink+' | '+row.after.prime+' | '+row.after.orundum+' |');
   }
   return lines.join('\n')+'\n';
@@ -403,6 +439,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
   await imageFile('session','home',wallet.image);
   notify('已核对首页，至纯源石 '+wallet.prime+'，合成玉 '+wallet.orundum+
     (wallet.sanity == null ? '' : '，当前理智 '+wallet.sanity)+'。');
+  const visits = [];
   for (const target of manifest.targets) {
     const row = ledger.items[target.id];
     if (row?.status !== '余额待复核' || (!target.claimAvailable && !target.stage)) continue;
@@ -419,7 +456,10 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       const client = await device.checkGame(signal);
       const {anchors} = await recognize({png:PNG.sync.write(image),width:image.width,height:image.height,client},signal);
       verified = await rewardReceipt(target,row.before,row.after,anchors);
-      if (!verified) continue;
+      if (!verified) {
+        if (needsParadoxVisit(target,row,anchors)) visits.push(target);
+        continue;
+      }
     } catch {
       signal.throwIfAborted();
       continue;
@@ -439,6 +479,28 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       modified = changed;
     }
     refreshSanityWait(manifest.targets,ledger,wallet.sanity,wallet.observedAt);
+    if (visits.length && !Object.values(ledger.items).some(row=>row.status==='进行中')) {
+      const target=visits.shift(), row=ledger.items[target.id];
+      const {row:stage}=await stageAliases(target.stage);
+      if (!stage?.name || stage.stageId!==target.stage || !stage.levelId.startsWith('obt/memory/')) continue;
+      notify('复核 '+target.label+' 的已完成标志，仅查看详情。');
+      let detail;
+      try { detail=await visitParadoxDetail(runCommand,target,stage.name,signal,emit); }
+      catch (error) { signal.throwIfAborted(); notify('关卡详情复核未完成。'+error.message); }
+      const beforeVisit=wallet;
+      wallet=await homeWallet();
+      if (detail && wallet.prime===beforeVisit.prime && wallet.orundum===beforeVisit.orundum) {
+        await imageFile(target.id,'detail',detail);
+        row.status='首通已核';
+        row.note='首通已核：原结算显示三星和首次掉落，同轮首页合成玉增加 200、源石持平。复查本人悖论模拟「'+stage.name+'」已完成，复查前后两项余额均持平。';
+        row.detailVerifiedAt=new Date().toISOString();
+        delete row.review;
+        ledger.opened[target.chapter]=true;
+        await save();
+        notify(target.label+' · 首通已核。原结算和复核关卡画面已保存。');
+      }
+      continue;
+    }
     const t = selectRewardTarget(manifest.targets,ledger,Date.now(),wallet.sanity);
     if (!t) {
       const remaining = manifest.targets.filter(item=>!closed.has(ledger.items[item.id]?.status)).length;
@@ -524,6 +586,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     }
     await imageFile(t.id,'home',wallet.image);
     const row = ledger.items[t.id] = {status,attempts,before,after:numbers(wallet),started:ledger.items[t.id].started,note:report,at:new Date().toISOString()};
+    if (evidence.best && needsParadoxVisit(t,row,evidence.best.anchors)) visits.push(t);
     if (evidence.best) {
       await imageFile(t.id,evidence.best.kind,evidence.best.preview);
       row.evidence = evidence.best.kind;
