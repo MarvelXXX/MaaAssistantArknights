@@ -5,6 +5,21 @@ import { intelBalanceCrop } from '../lib/vision.mjs';
 
 const frame = { width: 1600, height: 900, anchors: [{ id: 3, box: [600, 50, 90, 40] }], png: Buffer.from('frame') };
 const answer = action => ({ intent: 'operate', goal: '打开任务界面', note: '检查任务入口', action });
+test('只读基建仅在离开确认框允许点击勾选，并在输入前重查',async()=>{
+  const prompt={id:1,source:'OCR',label:'是否确认离开罗德岛基建 ？',box:[609,364,366,30]};
+  const exit={...frame,anchors:[prompt]};
+  const tap={type:'tap',x:1050,y:615};
+  assert.equal(baseInspectionInput(exit,tap),true);
+  assert.equal(baseInspectionInput(exit,{...tap,x:550}),false);
+  assert.equal(baseInspectionInput(exit,{...tap,y:550}),false);
+  const other={...frame,anchors:[{...prompt,label:'是否确认离开设施？'}]};
+  assert.equal(baseInspectionInput(other,tap),false);
+  assert.equal(baseInspectionInput({...exit,width:1280},tap),false);
+  let reads=0;
+  const game=fixture([{type:'tap',x:657,y:684}],{inspectBase:true,observe:async()=>++reads===1 ? exit : other});
+  await assert.rejects(runAgent(game.params),/导航目标已变化/);
+  assert.deepEqual(game.inputs,[]);
+});
 test('只查基建时拦截可直接收货的整张房间卡片，并在真实输入前复核导航',async()=>{
   const room={...frame,anchors:[
     {id:1,label:'进驻总览',box:[40,108,160,50]},
