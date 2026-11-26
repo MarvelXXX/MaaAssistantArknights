@@ -104,6 +104,35 @@ test('悖论列表导航使用空编队作业注明的手选技能', async () =>
   }
 });
 
+test('悖论视频合集按完整关名选分 P，多个版本或错误分 P 要求核对', async t => {
+  const pages = ['万箭齐发进阶', '#8【流星】万箭齐发', '流星其他关卡'].map((part,i)=>({part,cid:i+1,duration:142}));
+  t.mock.method(globalThis,'fetch',async()=>Response.json({code:0,data:{pages}}));
+  const lookup = part => biliInfo('BV0123456789',part,getSignal(),'mem_shotst_1');
+  assert.equal((await lookup()).part,2);
+  await assert.rejects(lookup(1),/P2/);
+  pages.push({part:'万箭齐发',cid:4,duration:180});
+  await assert.rejects(lookup(),/P2.+P4/);
+  assert.equal((await lookup(4)).part,4);
+});
+
+test('悖论作业缺编队时使用已核实的技能，保留站位和作业声明', async () => {
+  const stage = 'mem_shotst_1';
+  const empty = {...plan,stage_name:stage,opers:[],groups:[],doc:{details:'万箭齐发'}};
+  const action = nativeAction({task:'ParadoxCopilot',skill:2},true);
+  assert.equal(action.skill,2);
+  const prepared = await paradoxNavigationPlan(empty,stage,action.skill);
+  assert.deepEqual(prepared.opers,[{name:'流星',skill:2}]);
+  assert.equal(prepared.actions,empty.actions);
+  assert.deepEqual(empty.opers,[]);
+  assert.equal(await paradoxNavigationPlan(empty,stage),empty);
+  const authored = {...empty,doc:{details:'手选1技能进入关卡'}};
+  await assert.rejects(paradoxNavigationPlan(authored,stage,2),{beforeStart:true});
+  await assert.rejects(paradoxNavigationPlan(prepared,stage,1),{beforeStart:true});
+  await assert.rejects(paradoxNavigationPlan(empty,stage,3),{beforeStart:true});
+  assert.throws(()=>nativeAction({task:'ParadoxCopilot',skill:0},true));
+  assert.throws(()=>nativeAction({task:'ParadoxCopilot',skill:'2'},true));
+});
+
 test('作业必须包含有效的部署与编队，模型无权传入原生任务参数', () => {
   assert.equal(checkPlan(plan),plan);
   const mine = {type:'部署',name:'干扰地雷',location:[1,2]};

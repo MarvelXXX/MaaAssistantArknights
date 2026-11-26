@@ -29,6 +29,10 @@ export async function maaHome() {
 }
 
 export function nativeAction(a, hasPlan) {
+  if (a?.task === 'ParadoxCopilot' && hasPlan && a.skill !== undefined) {
+    if (!Number.isInteger(a.skill) || a.skill < 1 || a.skill > 3) throw new Error('悖论技能序号应为 1 至 3。');
+    return { type:'maa', task:a.task, skill:a.skill };
+  }
   if (a?.task === 'Award') return { type:'maa', task:'Award' };
   if (['Copilot','ParadoxCopilot'].includes(a?.task) && hasPlan) return { type:'maa', task:a.task };
   if (a?.task === 'Fight' && typeof a.stage === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(a.stage) &&
@@ -215,14 +219,17 @@ export async function scanRoster({home, device, serial, signal}) {
   });
 }
 
-export async function paradoxNavigationPlan(plan, stage) {
+export async function paradoxNavigationPlan(plan, stage, selectedSkill) {
   const details = plan.doc?.details || '';
-  if (plan.opers?.length || plan.groups?.length) return plan;
+  if (plan.opers?.length || plan.groups?.length) {
+    if (selectedSkill !== undefined) throw Object.assign(new Error('作业已有编队技能。请直接执行附件或先核对冲突。'),{beforeStart:true});
+    return plan;
+  }
   const instructions = details.split(/(?:^|[，,。；;：:\n])\s*(?:请\s*)?(?:手选|手动选择?)/).slice(1);
-  if (!instructions.length) return plan;
+  if (!instructions.length && selectedSkill === undefined) return plan;
 
   // List navigation defaults to skill one when the published plan omits its operator.
-  const skills = new Set();
+  const skills = new Set(selectedSkill === undefined ? [] : [selectedSkill]);
   const manualSelection = () => Object.assign(new Error('该悖论作业需要手选技能。请在游戏内核对并选好技能，再从本关准备界面执行 Copilot。'),{beforeStart:true});
   for (const part of instructions) {
     const slot = part.match(/^\s*(?:第\s*)?([123一二三])\s*技能(?=\s*(?:进入|进图|开战|开始|[，,。；;！!\n]|$))/)?.[1];
@@ -232,7 +239,10 @@ export async function paradoxNavigationPlan(plan, stage) {
   const id = /^mem_(.+)_\d+$/.exec(stage)?.[1];
   const matches = id ? (await characters()).characters.filter(op=>op.id.endsWith('_'+id)) : [];
   if (skills.size!==1 || matches.length!==1) throw manualSelection();
-  return {...plan,opers:[{name:matches[0].name,skill:[...skills][0]}]};
+  const [skill] = skills, [owner] = matches;
+  const maxSkill = owner.rarity >= 6 ? 3 : owner.rarity >= 4 ? 2 : owner.rarity === 3 ? 1 : 0;
+  if (!Number.isInteger(skill) || skill < 1 || skill > maxSkill) throw manualSelection();
+  return {...plan,opers:[{name:owner.name,skill}]};
 }
 
 export async function executeMaa(action, { home, device, serial, guide, formation, borrowSupport, signal, progress, prepare = false, afterStep }) {
@@ -247,7 +257,7 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
       const original = checkPlan(guide);
       const stage = await paradoxStageId(original);
       if (a.task === 'ParadoxCopilot' && !stage) throw new Error('从干员列表启动悖论模拟需要对应的悖论作业。');
-      const plan = a.task==='ParadoxCopilot' ? await paradoxNavigationPlan(original,stage) : original;
+      const plan = a.task==='ParadoxCopilot' ? await paradoxNavigationPlan(original,stage,a.skill) : original;
       await writeFile(filename, JSON.stringify(stage ? {...plan,stage_name:stage} : plan), 'utf8');
       if (afterStep != null) {
         if (a.task!=='Copilot' || !Number.isInteger(afterStep) || afterStep<1 || afterStep>=plan.actions.length) {

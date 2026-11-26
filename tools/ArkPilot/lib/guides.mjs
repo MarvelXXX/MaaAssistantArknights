@@ -165,10 +165,12 @@ export async function biliInfo(bv, part, signal, stage) {
     const {row} = await stageAliases(stage);
     const normalize = value => String(value || '').normalize('NFKC').toUpperCase().replace(/[‐‑‒–—]/g,'-').trim();
     const code = normalize(row?.code || stage);
+      const paradoxName = row?.levelId?.toLowerCase().startsWith('obt/memory/') && normalize(row.name);
     const matches = [];
     for (const [index,page] of pages.entries()) {
       const title = normalize(page.part);
-      if (title === code || (title.match(/[A-Z0-9]+(?:-[A-Z0-9]+)+/g) || []).includes(code)) matches.push(index+1);
+        const namedPart = paradoxName && title.split(/[\s【】「」『』《》\[\]()（）:：|/]+/u).includes(paradoxName);
+        if (namedPart || title === code || (title.match(/[A-Z0-9]+(?:-[A-Z0-9]+)+/g) || []).includes(code)) matches.push(index+1);
     }
     if (part == null && matches.length === 1) part = matches[0];
     if (part == null || (matches.length && !matches.includes(part))) {
