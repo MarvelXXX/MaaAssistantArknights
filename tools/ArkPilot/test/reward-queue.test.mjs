@@ -150,6 +150,22 @@ test('25 理智的剿灭等待期间可打 9 理智的关卡，恢复后可重�
   assert.equal(selectRewardTarget([expensive,cheap],ledger,50),expensive);
 });
 
+test('首页理智优先分配给可开战的目标，没有便宜关卡时保留补给核查', () => {
+  const main = {id:'zt8',ap:21,requires:[]};
+  const locked = {id:'story',ap:0,requires:['zt8']};
+  const cheap = {id:'mt3',ap:9,requires:[]};
+  const free = {id:'paradox',ap:0,requires:[]};
+  const targets = [main,locked,cheap,free];
+  const ledger = {items:{},opened:{}};
+  assert.equal(selectRewardTarget(targets,ledger,0,13),cheap);
+  assert.equal(selectRewardTarget(targets,ledger,0,0),free);
+  assert.equal(selectRewardTarget(targets,ledger,0,21),main);
+  assert.equal(selectRewardTarget(targets,ledger,0,undefined),main);
+  assert.equal(selectRewardTarget([main,locked,cheap],ledger,0,2),main);
+  ledger.items.zt8 = {status:'进行中'};
+  assert.equal(selectRewardTarget(targets,ledger,0,0),main);
+});
+
 test('打完低耗关后按首页理智重新排程，重复读数保留恢复时刻', () => {
   const minute=60000, now=100*minute;
   const main={id:'zt',ap:21,requires:[]}, cheap={id:'le',ap:9,requires:[]}, free={id:'mo',ap:0,requires:[]};

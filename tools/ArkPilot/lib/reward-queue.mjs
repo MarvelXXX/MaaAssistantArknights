@@ -67,10 +67,10 @@ export function nextRewardGuide(target, row) {
   return [target.guideId,...target.retryGuideIds].find(id=>id && !failed.has(id));
 }
 
-export function selectRewardTarget(targets, ledger, now) {
+export function selectRewardTarget(targets, ledger, now, sanity) {
   const interrupted = targets.find(t=>ledger.items[t.id]?.status==='进行中');
   if (interrupted) return interrupted;
-  return targets.find(t => {
+  const eligible = targets.filter(t => {
     const row = ledger.items[t.id];
     const corrected = (row?.status === '未完成' || row?.status === '入口关闭') &&
       (t.revision || 0) > (row.revision || 0);
@@ -80,6 +80,11 @@ export function selectRewardTarget(targets, ledger, now) {
       !(t.ap >= (ledger.sanityCost || 1) && ledger.sanityWait > now) && !(t.crystal && ledger.crystalWait > now && !ledger.opened[t.chapter]) &&
       t.requires.every(id => closed.has(ledger.items[id]?.status));
   });
+  if (Number.isInteger(sanity) && sanity >= 0 && sanity <= 999) {
+    const affordable = eligible.find(t => Number.isInteger(t.ap) && t.ap >= 0 && t.ap <= sanity);
+    if (affordable) return affordable;
+  }
+  return eligible[0];
 }
 
 export function refreshSanityWait(targets, ledger, sanity, observedAt) {
@@ -400,7 +405,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       modified = changed;
     }
     refreshSanityWait(manifest.targets,ledger,wallet.sanity,wallet.observedAt);
-    const t = selectRewardTarget(manifest.targets,ledger,Date.now());
+    const t = selectRewardTarget(manifest.targets,ledger,Date.now(),wallet.sanity);
     if (!t) {
       const remaining = manifest.targets.filter(item=>!closed.has(ledger.items[item.id]?.status)).length;
       if (!remaining) break;
