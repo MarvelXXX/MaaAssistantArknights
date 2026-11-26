@@ -12,7 +12,7 @@ import { recognize } from './lib/vision.mjs';
 import { chooseModel, listModels, explainFrames, proposeTeam } from './lib/model.mjs';
 import { runAgent } from './lib/agent.mjs';
 import { chapterRewards, stageRewards } from './lib/rewards.mjs';
-import { briefPlan, checkPlan, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, searchGuides } from './lib/guides.mjs';
+import { briefPlan, checkPlan, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, roguelikePlacements, searchGuides } from './lib/guides.mjs';
 import { executeMaa, maaHome, nativeAction, pausedBattleFrame, recognizeRecording, scanRoster, watchBattlePause, watchDaemonSelection, watchTutorialDialog } from './lib/maa.mjs';
 import { adaptGuide, normalizeRoster, rosterFit } from './lib/roster.mjs';
 import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
@@ -337,7 +337,8 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
           const cache = new Map();
           const excerpts = [];
           const videoNotes = [];
-          const lookupGuide = async a => {
+          const lookupGuide = async (a,frame) => {
+            if (a.type==='roguelike_placements') return roguelikePlacements(a.stage,frame);
             const key = JSON.stringify(a);
             if (cache.has(key)) return cache.get(key);
             if (a.type === 'stage_rewards' || a.type === 'chapter_rewards') {
