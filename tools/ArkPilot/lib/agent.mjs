@@ -19,6 +19,11 @@ function premiumConfirmation(frame) {
   return /(?:是否|确认|确定)(?:要|将|继续)?(?:花费|消耗|使用|用)[^。！？]{0,24}(?:源石|合成玉)|(?:是否|确认|确定)[^。！？]{0,12}源石[^。！？]{0,12}兑换[^。！？]{0,12}合成玉/u.test(text);
 }
 
+function battleResult(frame) {
+  return frame.anchors?.some(({label}) =>
+    /^(行动结束|演习结束|行动結束|演習結束|结算[二三]星标志|磨难结算标志|MISSIONRESULTS)$/i.test(label?.replace(/\s/g,'')));
+}
+
 function requestsBaseInspection(text) {
   return /基建|贸易站|制造站/.test(text) && /只读|只(?:看|查看|核查)|仅(?:看|查看|核查)|(?:查看|核对|检查)[^。]{0,48}(?:不要|不准|禁止|不得)(?:交付|收取|收货)/.test(text);
 }
@@ -227,6 +232,12 @@ export async function runAgent({ config, device, instruction, history, readOnly,
   const attemptedTasks = new Set();
   const protectsCurrency = practiceOnly || noPremiumSpend.test(instruction);
   let submittedExchange = false;
+  let afterNativeBattle = false, settledResult = false;
+  async function waitForRating(turn) {
+    emit({type:'status',text:'等待结算动画结束，再核对最终评价',turn});
+    await pause(4500, signal);
+    signal.throwIfAborted();
+  }
   let blockedBaseInputs=0;
   async function observeGame(raw) {
     const frame=await observe(raw,signal);
@@ -250,7 +261,15 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     let frame = {anchors:[],recognition:'仅查攻略，无游戏画面'};
     if (device) {
       emit({ type: 'status', text: '正在识别游戏画面', turn });
+      if (afterNativeBattle) await waitForRating(turn);
       frame = await observeGame(await device.capture(signal));
+      // The result heading and outlines appear before all earned stars light up.
+      if (!settledResult && battleResult(frame)) {
+        await waitForRating(turn);
+        frame = await observeGame(await device.capture(signal));
+      }
+      settledResult = battleResult(frame);
+      afterNativeBattle = false;
     }
     signal.throwIfAborted();
     if (device) emit({ type: 'frame', preview: frame.preview, width: frame.width, height: frame.height,
@@ -339,10 +358,14 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       if (attemptedTasks.has(key)) throw new Error('本条指令已尝试该 Maa 任务，已停止重复执行。');
       attemptedTasks.add(key);
       try {
+        afterNativeBattle = ['Fight','Copilot','ParadoxCopilot'].includes(action.task);
         nativeReport = await runNative(action);
       } catch (error) {
         signal.throwIfAborted();
-        if (error.beforeStart) attemptedTasks.delete(key);
+        if (error.beforeStart) {
+          afterNativeBattle = false;
+          attemptedTasks.delete(key);
+        }
         const reason = (error.beforeStart ? 'Maa 尚未开战。' : 'Maa 未确认完成。') + error.message;
         steps.push({turn,action,note,result:reason});
         emit({type:'research_error',text:reason,turn});

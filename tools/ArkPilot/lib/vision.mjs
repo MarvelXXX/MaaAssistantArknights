@@ -13,7 +13,7 @@ const labels = {
   GameStart: '启动页 START',
   Home: '主界面设置入口', StartToWakeUp: '点击开始', ReceiveAward: '领取任务奖励',
   WeeklyTask: '周常任务标签', ReceiveMail: '领取邮件附件', StartButton2: '编队页开始行动',
-  BattleStartExercise: '演习编队页 PLAN 开始行动',
+  BattleStartExercise: '演习编队页 PLAN 开始行动', EndOfAction: '行动结束',
   'StageDrops-Stars-3': '结算三星标志', 'StageDrops-Stars-2': '结算二星标志',
   'StageDrops-Stars-Adverse': '磨难结算标志', UseStone: '源石恢复提示',
   OperOpenInformationMenu: '干员档案入口', OperOpenParadox: '档案中的悖论模拟入口',

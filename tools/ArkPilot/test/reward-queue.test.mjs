@@ -243,6 +243,7 @@ test('悖论凭证优先保留无遮挡结算，OCR漏读时仅保存战后关�
   assert.equal(first.best.preview,'detail');
   first.observe(frame('done','已完成模拟作战'));
   assert.equal(first.best.preview,'done');
+  first.observe(frame('animating','结算二星标志'));
   first.observe(frame('stars','结算三星标志'));
   first.observe(frame('fading','行动结束'));
   first.observe(detail);
