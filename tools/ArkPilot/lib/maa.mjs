@@ -16,6 +16,12 @@ import { recognize } from './vision.mjs';
 const worker = fileURLToPath(new URL('./maa-worker.ps1', import.meta.url));
 const execute = promisify(execFile);
 const videoPhases = {OcrFormation:'识别编队',OcrStage:'识别关卡',MatchDeployment:'匹配待部署干员',Slice:'切分战斗画面',CompSkill:'分析技能',DetectOperators:'识别场上干员'};
+const navigationTasks = new Map([
+  ['SkipStory', ['SkipThePreBattlePlot']],
+  ['DismissResult', ['Copilot@EndOfAction-Bypass']],
+  ['ReturnHome', ['Home', 'Home@QuickSwitch@ToHome@Entry', 'Home@QuickSwitch@ToHome@Open']],
+  ['OpenTerminal', ['Terminal-Entry']],
+]);
 const clients = { 'com.hypergryph.arknights':'Official', 'com.hypergryph.arknights.bilibili':'Bilibili',
   'com.YoStarEN.Arknights':'YoStarEN', 'com.YoStarJP.Arknights':'YoStarJP', 'com.YoStarKR.Arknights':'YoStarKR', 'tw.txwy.and.arknights':'txwy' };
 
@@ -34,7 +40,7 @@ export function nativeAction(a, hasPlan) {
     if (!Number.isInteger(a.skill) || a.skill < 1 || a.skill > 3) throw new Error('悖论技能序号应为 1 至 3。');
     return { type:'maa', task:a.task, skill:a.skill };
   }
-  if (['Award','ActivityOrundum','SkipStory','DismissResult'].includes(a?.task)) return { type:'maa', task:a.task };
+  if (['Award','ActivityOrundum'].includes(a?.task) || navigationTasks.has(a?.task)) return { type:'maa', task:a.task };
   if (['Copilot','ParadoxCopilot'].includes(a?.task) && hasPlan) return { type:'maa', task:a.task };
   if (a?.task === 'Fight' && typeof a.stage === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(a.stage) &&
       a.stage.length <= 40 && Number.isInteger(a.times) && a.times >= 1 && a.times <= 100) {
@@ -258,9 +264,15 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
     let params, stageTask;
     let type = a.task;
     if (a.task === 'Fight') params = {stage:a.stage, times:a.times, medicine:0, stone:0, expiring_medicine:0, medicine_expire_days:0};
-    if (a.task === 'SkipStory' || a.task === 'DismissResult') {
+    if (navigationTasks.has(a.task)) {
       type = 'Custom';
-      params = {task_names:[a.task === 'SkipStory' ? 'SkipThePreBattlePlot' : 'Copilot@EndOfAction-Bypass']};
+      if (a.task === 'OpenTerminal' && !prepare) {
+        const frame = await recognize(await device.capture(signal),signal);
+        if (!frame.anchors.some(anchor=>anchor.source==='Maa' && anchor.label==='主界面设置入口')) {
+          throw new Error('请先返回游戏首页再打开作战终端。');
+        }
+      }
+      params = {task_names:navigationTasks.get(a.task)};
     }
     if (a.task === 'Award' || a.task === 'ActivityOrundum') {
       type = 'Award';

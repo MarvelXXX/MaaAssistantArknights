@@ -17,9 +17,10 @@ import { executeMaa, maaHome, nativeAction, pausedBattleFrame, recognizeRecordin
 import { adaptGuide, normalizeRoster, rosterFit } from './lib/roster.mjs';
 import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
 import { runRewardQueue } from './lib/reward-queue.mjs';
+import { nativeCommand } from './public/native-commands.js';
 
 const staticFiles = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
-const nativeCommands = new Map([['/活动合成玉','ActivityOrundum'],['/跳过剧情','SkipStory'],['/退出结算','DismissResult'],['/悖论作业','ParadoxCopilot']]);
+staticFiles.set('/native-commands.js', ['native-commands.js', 'text/javascript']);
 staticFiles.set('/guides.js', ['guides.js', 'text/javascript']);
 function eventStream(res) {
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });
@@ -214,7 +215,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
       const roster = data.roster ? await normalizeRoster(data.roster) : null;
       const researchOnly = data.researchOnly === true;
       const instruction = data.instruction?.trim();
-      const nativeRequest = data.native ?? (nativeCommands.has(instruction) ? {task:nativeCommands.get(instruction)} : null);
+      const nativeRequest = data.native ?? nativeCommand(instruction);
       const direct = nativeRequest ? nativeAction(nativeRequest,!!attachedGuide) : null;
       if (direct && (data.readOnly === true || researchOnly)) throw new Error('当前为只读分析，请切换到允许操作再运行 Maa。');
       const config = direct ? null : modelConfig(data);

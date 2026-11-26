@@ -266,8 +266,13 @@ test('原生任务支持免模型执行，遵守只读模式及服务端独占',
   const dismiss = await send({...activity,instruction:'/退出结算'});
   assert.match(await dismiss.text(),/"outcome":"finish"/);
   assert.deepEqual(calls[3].a,{type:'maa',task:'DismissResult'});
+  for (const [instruction,task] of [['/返回首页','ReturnHome'],['/作战终端','OpenTerminal']]) {
+    assert.equal((await send({...activity,instruction,readOnly:true})).status,400);
+    assert.match(await (await send({...activity,instruction})).text(),/"outcome":"finish"/);
+    assert.deepEqual(calls.at(-1).a,{type:'maa',task});
+  }
   assert.equal((await send({...activity,instruction:'/悖论作业'})).status,400);
-  assert.equal(calls.length,4);
+  assert.equal(calls.length,6);
 });
 
 test('同一指令依次打不同悖论，同一关重复时停止', async () => {
