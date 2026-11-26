@@ -189,7 +189,8 @@ async function submit(event, native = null, label = '', existing = null) {
   event?.preventDefault();
   const instruction = label || $('instruction').value.trim();
   if (!instruction || controller) return;
-  if (!native && instruction === '/活动合成玉') native = {task:'ActivityOrundum'};
+  const localCommands = {'/活动合成玉':'ActivityOrundum','/跳过剧情':'SkipStory','/退出结算':'DismissResult','/悖论作业':'ParadoxCopilot'};
+  if (!native && Object.hasOwn(localCommands,instruction)) native = {task:localCommands[instruction]};
   if (!existing && !native && !config.url) { openSettings('填写模型服务地址后即可发送这条指令。'); return; }
   const serial = existing?.serial || $('device').value;
   const researchOnly = $('mode').value === 'research';

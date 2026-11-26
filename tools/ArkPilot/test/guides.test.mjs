@@ -259,6 +259,15 @@ test('原生任务支持免模型执行，遵守只读模式及服务端独占',
   assert.equal(activityEvents.at(-1).outcome,'finish');
   assert.match(activityEvents.at(-1).note,/检查幸运墙和限时开采/);
   assert.deepEqual(nativeAction({task:'ActivityOrundum',recruit:true,mail:true},false),calls[1].a);
+  const skip = await send({...activity,instruction:'/跳过剧情'});
+  assert.match(await skip.text(),/"outcome":"finish"/);
+  assert.deepEqual(calls[2].a,{type:'maa',task:'SkipStory'});
+  assert.deepEqual(nativeAction({task:'SkipStory',task_names:['Fight']},false),calls[2].a);
+  const dismiss = await send({...activity,instruction:'/退出结算'});
+  assert.match(await dismiss.text(),/"outcome":"finish"/);
+  assert.deepEqual(calls[3].a,{type:'maa',task:'DismissResult'});
+  assert.equal((await send({...activity,instruction:'/悖论作业'})).status,400);
+  assert.equal(calls.length,4);
 });
 
 test('同一指令依次打不同悖论，同一关重复时停止', async () => {

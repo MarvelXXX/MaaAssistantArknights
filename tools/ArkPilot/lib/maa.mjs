@@ -11,6 +11,7 @@ import { parseEnv, promisify } from 'node:util';
 import { adbPath } from './device.mjs';
 import { checkPlan, paradoxStageId } from './guides.mjs';
 import { characters } from './roster.mjs';
+import { recognize } from './vision.mjs';
 
 const worker = fileURLToPath(new URL('./maa-worker.ps1', import.meta.url));
 const execute = promisify(execFile);
@@ -33,7 +34,7 @@ export function nativeAction(a, hasPlan) {
     if (!Number.isInteger(a.skill) || a.skill < 1 || a.skill > 3) throw new Error('悖论技能序号应为 1 至 3。');
     return { type:'maa', task:a.task, skill:a.skill };
   }
-  if (a?.task === 'Award' || a?.task === 'ActivityOrundum') return { type:'maa', task:a.task };
+  if (['Award','ActivityOrundum','SkipStory','DismissResult'].includes(a?.task)) return { type:'maa', task:a.task };
   if (['Copilot','ParadoxCopilot'].includes(a?.task) && hasPlan) return { type:'maa', task:a.task };
   if (a?.task === 'Fight' && typeof a.stage === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(a.stage) &&
       a.stage.length <= 40 && Number.isInteger(a.times) && a.times >= 1 && a.times <= 100) {
@@ -257,6 +258,10 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
     let params, stageTask;
     let type = a.task;
     if (a.task === 'Fight') params = {stage:a.stage, times:a.times, medicine:0, stone:0, expiring_medicine:0, medicine_expire_days:0};
+    if (a.task === 'SkipStory' || a.task === 'DismissResult') {
+      type = 'Custom';
+      params = {task_names:[a.task === 'SkipStory' ? 'SkipThePreBattlePlot' : 'Copilot@EndOfAction-Bypass']};
+    }
     if (a.task === 'Award' || a.task === 'ActivityOrundum') {
       type = 'Award';
       const activity = a.task === 'ActivityOrundum';
@@ -290,6 +295,13 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
     }
     const job = {home, work, type, params, stageTask, serial, prepare};
     if (prepare) return runCore(job, signal, progress);
+    if (a.task === 'ParadoxCopilot') {
+      const frame = await recognize(await device.capture(signal),signal);
+      if (frame.anchors.some(anchor=>anchor.source==='Maa' && anchor.label==='主界面设置入口')) {
+        progress?.('从首页进入干员列表');
+        await connectedCore({home,work,serial,type:'Custom',params:{task_names:['OperBoxBegin']}},device,signal,progress);
+      }
+    }
     return connectedCore(job,device,signal,progress);
   });
 }
