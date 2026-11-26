@@ -111,18 +111,15 @@ export function recognizedDefeat(tag, info) {
     /^(?:[^@]+@)*FightMissionFailed(?:AndStop)?(?:-Bypass)?$/.test(info.details?.task);
 }
 
-export async function copilotDefeatReport(work, lastAction) {
+export async function copilotDefeatReport(work, lastAction, skillAttempts = new Map()) {
   let message = 'Maa 已识别到本局任务失败。';
   let log;
   try {
     log = await open(path.join(work,'debug','asst.log'),'r');
-    const {size} = await log.stat();
-    const tail = Buffer.alloc(Math.min(256 * 1024,size));
-    const {bytesRead} = await log.read(tail,0,tail.length,size-tail.length);
-    const samples = tail.toString('utf8',0,bytesRead).matchAll(/\] Kills:\s*(\d+)\s*\/\s*(\d+)\s*$/gm);
     let last;
-    for (const sample of samples) {
-      if (Number(sample[2]) > 0 && Number(sample[1]) <= Number(sample[2])) last = sample;
+    for await (const line of log.readLines()) {
+      const sample = line.match(/\] Kills:\s*(\d+)\s*\/\s*(\d+)\s*$/);
+      if (sample && Number(sample[2]) > 0 && Number(sample[1]) <= Number(sample[2])) last = sample;
     }
     if (last) message += '原生日志最后识别的击倒数 '+last[1]+'/'+last[2]+'。';
   } catch {
@@ -131,6 +128,10 @@ export async function copilotDefeatReport(work, lastAction) {
     await log?.close().catch(()=>{});
   }
   if (lastAction) message += '失败前最后尝试的作业动作 '+lastAction+'。';
+  if (skillAttempts.size) {
+    const counts = Array.from(skillAttempts, ([name,count]) => name+' ×'+count);
+    message += '作业手动技能步骤回调：'+counts.join('、')+'。这些回调在等待触发条件前发出，技能生效需由战斗画面核实。';
+  }
   return message;
 }
 
@@ -145,6 +146,7 @@ export async function runCore({ home, work, client = '', serial = '', type, para
     let forceTimer, stderr = '', last = '', coreVersion = '', videoPhase = '';
     const copilot = ['Copilot','ParadoxCopilot','SingleStep'].includes(type);
     let defeat = false, lastAction = '';
+    const skillAttempts = new Map();
     const abort = () => {
       child.stdin.end('stop\n');
       forceTimer = setTimeout(() => child.kill(), 2500);
@@ -169,6 +171,10 @@ export async function runCore({ home, work, client = '', serial = '', type, para
       if (info.what === 'CopilotAction') {
         name = [info.details?.action,info.details?.target].filter(Boolean).join(' · ').slice(0,120);
         if (!defeat) lastAction = name;
+        if (!defeat && info.details?.action === 'UseSkill') {
+          const target = String(info.details.target || '未命名目标').slice(0,60);
+          skillAttempts.set(target,(skillAttempts.get(target) || 0)+1);
+        }
       }
       if (copilot && recognizedDefeat(tag,info)) defeat = true;
       if (info.what === 'StageDrops' && Number.isInteger(info.details?.stars)) name = '关卡结算 · ' + info.details.stars + ' 星';
@@ -179,7 +185,7 @@ export async function runCore({ home, work, client = '', serial = '', type, para
       clearTimeout(forceTimer);
       signal.removeEventListener('abort', abort);
       if (signal.aborted) return reject(signal.reason);
-      if (defeat) return reject(new Error(await copilotDefeatReport(work,lastAction)));
+      if (defeat) return reject(new Error(await copilotDefeatReport(work,lastAction,skillAttempts)));
       if (code !== 0) {
         if (type === 'VideoRecognition' && videoPhase) return reject(new Error('视频已解码，Maa 未能完成' + videoPhase + '。'));
         const err = new Error('Maa 未完成 ' + type + '。' + (stderr.trim() || '请检查运行包依赖、设备连接或素材。') + (last ? ' 最近事件：' + last : ''));

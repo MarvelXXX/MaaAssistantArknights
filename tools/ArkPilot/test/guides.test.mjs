@@ -28,6 +28,12 @@ test('原生任务链结束时保留实战失败回调与最近一次有效击�
   await mkdir(path.join(work,'debug'));
   await writeFile(path.join(work,'debug','asst.log'),'[TRC] Kills: 1 / 68\r\n[TRC] Kills: 3 / 68\r\n[TRC] Kills: 69 / 68\r\n');
   assert.match(await copilotDefeatReport(work,'UseSkill · 德克萨斯'),/最后识别的击倒数 3\/68。失败前最后尝试的作业动作 UseSkill · 德克萨斯/);
+  const trace = '[TRC] Waiting for end of action\r\n'.repeat(10000);
+  await writeFile(path.join(work,'debug','asst.log'),'[TRC] Kills: 15 / 19\r\n'+trace+'[TRC] Kills: 21 / 19\r\n');
+  const report = await copilotDefeatReport(work,'SwitchSpeed',new Map([['崖心',3],['蛇屠箱',1]]));
+  assert.match(report,/最后识别的击倒数 15\/19/);
+  assert.match(report,/最后尝试的作业动作 SwitchSpeed/);
+  assert.match(report,/崖心 ×3、蛇屠箱 ×1.*等待触发条件前/);
 });
 
 test('解析带清晰度的单段 MP4 并保留 Range，拒绝其他封装', async t => {
