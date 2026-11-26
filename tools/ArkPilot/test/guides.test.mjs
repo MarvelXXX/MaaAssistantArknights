@@ -320,7 +320,7 @@ test('Maa 中断后重新观察实机且不再次开战', async () => {
 
 test('视频笔记只提交带时间的内联帧，拒绝远程图片替换', async t => {
   const signal = getSignal();
-  const config = {url:'http://localhost/v1',model:'test',vision:true};
+  const config = {provider:'api',apiOptIn:true,url:'http://localhost/v1',model:'test',vision:true};
   const frames = [1,3].map(seconds => ({seconds,image:'data:image/jpeg;base64,/9j/AQ=='}));
   let sent;
   t.mock.method(globalThis,'fetch',async (_url,req) => {

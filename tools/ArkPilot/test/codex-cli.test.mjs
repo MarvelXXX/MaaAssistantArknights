@@ -2,6 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, stat } from 'node:fs/promises';
 import { codexCompletion } from '../lib/codex-cli.mjs';
+import { modelSettings, selectedProvider } from '../public/model-settings.js';
+
+test('旧地址、推断过的 API 模式和已撤销的选择均使用订阅，发给服务器的数据不含密钥',()=>{
+  const settings={url:'https://example.invalid/v1',key:'test-only',apiModel:'api-model',codexModel:'gpt-6.2-sol',vision:true,limit:24};
+  for (const state of [{},{provider:'api'},{provider:'api',apiOptIn:'true'},{provider:'codex',apiOptIn:true}]) {
+    const config={...settings,...state};
+    assert.equal(selectedProvider(config),'codex');
+    assert.deepEqual(modelSettings(config),{provider:'codex',model:'gpt-6.2-sol',vision:true,limit:24});
+  }
+  assert.equal(modelSettings({...settings,provider:'api',apiOptIn:true}).key,'test-only');
+});
 
 test('Codex 订阅模式拒绝使用 API Key 登录的 CLI',async()=>{
   const calls=[];

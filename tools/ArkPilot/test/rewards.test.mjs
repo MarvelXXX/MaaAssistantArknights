@@ -5,7 +5,7 @@ import { decide, listModels } from '../lib/model.mjs';
 import { matchChapterRewards, matchRewards, matchSimulations } from '../lib/rewards.mjs';
 
 test('429限流尊重 Retry-After，额度不足不作为临时断连重试',async t=>{
-  const cfg={url:'http://test.invalid/v1'};
+  const cfg={provider:'api',apiOptIn:true,url:'http://test.invalid/v1'};
   let code='rate_limit_exceeded',calls=0;
   t.mock.method(globalThis,'fetch',async()=>{calls++;return Response.json({error:{code}},{status:429,headers:{'retry-after':'72'}});});
   await assert.rejects(listModels(cfg),e=>e.code==='MODEL_TEMPORARY' && e.retryAfterMs===72000);
@@ -15,7 +15,7 @@ test('429限流尊重 Retry-After，额度不足不作为临时断连重试',asy
 });
 
 test('模型服务暂时不可用与无效凭据分别上报给首页读数重试',async t=>{
-  const cfg={url:'http://test.invalid/v1'}, signal=AbortSignal.timeout(5000);
+  const cfg={provider:'api',apiOptIn:true,url:'http://test.invalid/v1'}, signal=AbortSignal.timeout(5000);
   let status=503, requests=0;
   t.mock.method(globalThis,'fetch',async()=>{requests++;return new Response(null,{status});});
   await assert.rejects(listModels(cfg,signal),e=>e.status===503 && e.code==='MODEL_TEMPORARY');
@@ -26,7 +26,7 @@ test('模型服务暂时不可用与无效凭据分别上报给首页读数重�
 });
 
 test('兼容接口拒绝原生函数时，JSON规划仍能看到最新的章节查询及参数',async t=>{
-  const config={url:'http://localhost/v1',model:'test',vision:false};
+  const config={provider:'api',apiOptIn:true,url:'http://localhost/v1',model:'test',vision:false};
   const context={instruction:'查看苦难摇篮的公开首通奖励',recentSteps:[]};
   const action={type:'chapter_rewards',stage:'苦难摇篮'};
   t.mock.method(globalThis,'fetch',async (_url,options)=>{

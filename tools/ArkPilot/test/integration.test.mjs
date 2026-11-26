@@ -21,6 +21,27 @@ async function listen(server, t) {
   return 'http://127.0.0.1:' + server.address().port;
 }
 
+test('订阅启动失败时旧客户端携带的 API Key 不会被使用，明确启用 API 后才能查询其模型',async t=>{
+  const previous=process.env.ARK_CODEX_BIN;
+  process.env.ARK_CODEX_BIN='arkpilot-missing-codex-test-executable';
+  t.after(()=>{if(previous===undefined) delete process.env.ARK_CODEX_BIN; else process.env.ARK_CODEX_BIN=previous;});
+  const auth=[];
+  const endpoint=await listen(http.createServer((req,res)=>{
+    auth.push(req.headers.authorization);res.end(JSON.stringify({data:[{id:'test-model'}]}));
+  }),t);
+  const app=await listen(createServer(),t);
+  const models=async choice=>fetch(app+'/api/models',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({url:endpoint,key:'sample-test-key',...choice})});
+  for(const legacy of [{},{provider:'api'},{provider:'codex',apiOptIn:true}]){
+    const response=await models(legacy);
+    assert.equal(response.status,400);
+    assert.match((await response.json()).error,/未找到 Codex CLI/);
+  }
+  assert.deepEqual(auth,[]);
+  assert.deepEqual(await (await models({provider:'api',apiOptIn:true})).json(),{models:['test-model']});
+  assert.deepEqual(auth,['Bearer sample-test-key']);
+});
+
 test('后台首通在网页断开后保持唯一运行，新网页接收进度、明确停止后才终止', async t => {
   const oldFile=process.env.ARK_REWARD_QUEUE;
   process.env.ARK_REWARD_QUEUE='test-reward-manifest.json';
@@ -36,7 +57,7 @@ test('后台首通在网页断开后保持唯一运行，新网页接收进度�
     }}),t);
   const post=(route,data,signal)=>fetch(app+'/api/'+route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data),signal});
   const health=async()=>(await fetch(app+'/api/health')).json();
-  const data={instruction:'/后台首通清单',serial:'device',url:'http://example.invalid/v1',model:'test',backgroundQueue:true};
+  const data={instruction:'/后台首通清单',serial:'device',provider:'api',apiOptIn:true,url:'http://example.invalid/v1',model:'test',backgroundQueue:true};
   const original=new AbortController();
   const initial=await post('run',data,original.signal);
   assert.equal(initial.status,200);
@@ -73,7 +94,7 @@ test('前台清单超过普通指令时限时仍返回实际错误',async t=>{
       throw new Error('模型服务返回 HTTP 503。');
     }}),t);
   const res=await fetch(app+'/api/run',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({instruction:'/首通清单',serial:'device',url:'http://example.invalid/v1',model:'test'})});
+    body:JSON.stringify({instruction:'/首通清单',serial:'device',provider:'api',apiOptIn:true,url:'http://example.invalid/v1',model:'test'})});
   const events=(await res.text()).trim().split('\n').map(line=>JSON.parse(line));
   assert.deepEqual(events.at(-1),{type:'error',text:'模型服务返回 HTTP 503。'});
 });
@@ -101,7 +122,7 @@ test('HTTP 对话经兼容模型返回点击，重新截图确认，并支持纯
     res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(reply) } }] }));
   }), t);
   const app = await listen(createServer({ getDevice: async () => device }), t);
-  const data = { url: model + '/v1', key:'example-test-key', serial:'test', instruction:'打开任务界面', limit:1 };
+  const data = { provider:'api', apiOptIn:true, url: model + '/v1', key:'example-test-key', serial:'test', instruction:'打开任务界面', limit:1 };
   const post = async (fields, origin = app) => fetch(app + '/api/run', {
     method:'POST', headers:{'Content-Type':'application/json',Origin:origin}, body: JSON.stringify({...data, ...fields}) });
   assert.equal((await post({}, 'http://another.example')).status, 403);
@@ -201,7 +222,7 @@ test('等待模型时独占设备，浏览器断开后释放任务', { timeout: 
   })}), t);
   const cancel = new AbortController();
   const send = signal => fetch(app + '/api/run', { method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({ model:'test', url:model, serial:'test', instruction:'领取任务奖励' }), signal });
+    body:JSON.stringify({ provider:'api', apiOptIn:true, model:'test', url:model, serial:'test', instruction:'领取任务奖励' }), signal });
   const stream = await send(cancel.signal);
   assert.equal(stream.status, 200);
   await thinking;

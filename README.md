@@ -41,6 +41,18 @@ MAA 的意思是 MAA Assistant Arknights
 
 </div>
 
+## ArkPilot 对话指令台
+
+这个分支提供 ArkPilot。你可以在本机网页里用中文询问当前游戏画面、查找关卡攻略，或指挥模拟器操作。ArkPilot 将截图和 OCR 结果交给模型判断下一步，通过 ADB 执行点击和滑动；安装 Windows x64 版 Maa 后，还可以调用 MaaCore 运行日常任务、代理指挥和战斗作业。
+
+**在 Windows 上开始使用**
+
+1. 准备 Node.js 22 或更新版本，连接已启用 ADB 的安卓设备或模拟器，将《明日方舟》切到前台。
+2. 用 `codex login` 登录 ChatGPT，在本地仓库双击 `tools/ArkPilot/start.cmd`。ArkPilot 默认使用 Codex 订阅和 `gpt-6.2-sol`。只有在连接设置中手动选择并保存 **OpenAI 兼容 API** 才会启用 API 模式。
+3. 在网页中选中设备，先用 **只读分析** 提问「这个界面是什么活动？」。需要实际点击或部署干员时切换到 **允许操作**。只想查攻略时可选 **仅查攻略**，无需连接设备。
+
+干员名册、替补分析、PRTS 作业导入和视频采样的用法见 [ArkPilot 使用指南](./tools/ArkPilot/README.md)。
+
 ## 下载与安装
 
 请阅读 [文档](https://docs.maa.plus/zh-cn/manual/newbie.html) 后前往 [官网](https://maa.plus) 或 [Releases](https://github.com/MaaAssistantArknights/MaaAssistantArknights/releases) 下载，并参考 [新手上路](https://docs.maa.plus/zh-cn/manual/newbie.html) 进行安装。

@@ -18,9 +18,11 @@ import { adaptGuide, normalizeRoster, rosterFit } from './lib/roster.mjs';
 import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
 import { runRewardQueue } from './lib/reward-queue.mjs';
 import { nativeCommand } from './public/native-commands.js';
+import { defaultCodexModel, selectedProvider } from './public/model-settings.js';
 
 const staticFiles = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
 staticFiles.set('/native-commands.js', ['native-commands.js', 'text/javascript']);
+staticFiles.set('/model-settings.js', ['model-settings.js', 'text/javascript']);
 staticFiles.set('/guides.js', ['guides.js', 'text/javascript']);
 function eventStream(res) {
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });
@@ -83,8 +85,8 @@ async function body(req, maxBytes = 524288) {
 }
 function modelConfig(data) {
   if (data.provider!=null && !['api','codex'].includes(data.provider)) throw new Error('未知的模型连接方式。');
-  if (data.provider==='codex') {
-    const model=data.model ?? '';
+  if (selectedProvider(data)==='codex') {
+    const model=data.provider==='codex' ? data.model ?? '' : defaultCodexModel;
     if (typeof model!=='string' || model.trim() && !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,149}$/.test(model.trim())) throw new Error('Codex 模型 ID 无效。');
     return {provider:'codex',model:model.trim(),vision:data.vision!==false};
   }
@@ -92,7 +94,7 @@ function modelConfig(data) {
     if (data[key] != null && (typeof data[key] !== 'string' || data[key].length > max)) throw new Error('模型配置格式有误。');
   }
   if (!data.url?.trim()) throw new Error('请先在连接设置中填写模型服务 URL。');
-  return { url: data.url.trim(), key: data.key?.trim(), model: data.model?.trim(), vision: data.vision !== false };
+  return {provider:'api',apiOptIn:true,url:data.url.trim(),key:data.key?.trim(),model:data.model?.trim(),vision:data.vision!==false};
 }
 function historyFrom(data) {
   if (!Array.isArray(data)) return [];

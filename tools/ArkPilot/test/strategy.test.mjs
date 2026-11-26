@@ -86,7 +86,7 @@ test('实用工具以函数调用发送，将取帧结果作为工具回复交�
       {content:JSON.stringify({intent:'inspect',goal:'看视频',note:'已读取',action:{type:'finish'}})};
     return Response.json({choices:[{message}]});
   });
-  const cfg={url:'http://localhost/v1',model:'test',vision:true},ctx={instruction:'看看视频',recentSteps:[]};
+  const cfg={provider:'api',apiOptIn:true,url:'http://localhost/v1',model:'test',vision:true},ctx={instruction:'看看视频',recentSteps:[]};
   const step=await decide(cfg,ctx,{},AbortSignal.timeout(5000));
   assert.equal(step.action.type,'analyze_video');
   assert.ok(requests[0].tools.some(t=>t.function.name==='analyze_video'));
@@ -161,7 +161,7 @@ test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无�
   },native:async(a,options)=>native.push(options)}),t);
   const run = async extra=>{
     const res=await fetch(app+'/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      guide:author,roster:box,url:model,model:'fixture',vision:false,instruction:'按我的干员适配并执行',...extra,
+      guide:author,roster:box,provider:'api',apiOptIn:true,url:model,model:'fixture',vision:false,instruction:'按我的干员适配并执行',...extra,
     })});
     return (await res.text()).trim().split('\n').map(JSON.parse);
   };
@@ -198,7 +198,7 @@ test('首通自动编队传递缺位助战，普通指令和未开启自动编�
   async function send(instruction,formation) {
     turns=0;
     const res=await fetch(app+'/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      instruction,formation,guide:author,roster:box,url:model,model:'fixture',serial:'device',vision:true,
+      instruction,formation,guide:author,roster:box,provider:'api',apiOptIn:true,url:model,model:'fixture',serial:'device',vision:true,
     })});
     return (await res.text()).trim().split('\n').map(JSON.parse);
   }

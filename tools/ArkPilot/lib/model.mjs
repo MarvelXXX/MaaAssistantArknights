@@ -1,5 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { codexCompletion, codexModels } from './codex-cli.mjs';
+import { defaultCodexModel, selectedProvider } from '../public/model-settings.js';
 
 const instructions = [
   '国服终端当前布局中，曲谱在底栏左起第二个书册，乐章收录在曲谱右上，可通过日历切到按开启时间排列。先以当前画面核对入口。常驻活动地图上，普通与突袭可能共用节点，必要时切换难度核对评价。',
@@ -67,7 +68,7 @@ function endpoint(url, operation) {
 }
 
 async function request(config, operation, payload, signal) {
-  if (config.provider==='codex' && operation==='chat/completions') {
+  if (selectedProvider(config)==='codex') {
     const content=await codexCompletion(payload.model,payload.messages,signal);
     return {choices:[{message:{content}}]};
   }
@@ -121,7 +122,7 @@ async function request(config, operation, payload, signal) {
 }
 
 export async function listModels(config, signal) {
-  if (config.provider==='codex') return codexModels(signal);
+  if (selectedProvider(config)==='codex') return codexModels(signal);
   const json = await request(config, 'models', undefined, signal);
   if (!Array.isArray(json.data)) throw new Error('服务未提供模型列表，请直接填写模型 ID。');
   return json.data.map(item => item?.id).filter(id => typeof id === 'string' && id.length <= 250);
@@ -130,7 +131,7 @@ export async function listModels(config, signal) {
 export async function chooseModel(config, signal) {
   if (config.model) return config.model;
   const ids = await listModels(config, signal);
-  if (config.provider==='codex') return ids.includes('gpt-6.2-sol') ? 'gpt-6.2-sol' : ids[0];
+  if (selectedProvider(config)==='codex') return ids.includes(defaultCodexModel) ? defaultCodexModel : ids[0];
   if (ids.length === 1) return ids[0];
   throw new Error(ids.length ? '此服务有多个模型，请在连接设置里选择一个。' : '服务没有列出模型，请在连接设置里填写模型 ID。');
 }
@@ -165,7 +166,7 @@ export async function decide(config, context, frame, signal) {
     : prompt;
   const payload = {model:config.model,stream:false,messages:[{role:'system',content:instructions+'\n本轮可用的资料工具及参数\n'+toolList},{role:'user',content}]};
   let result;
-  if (config.provider!=='codex' && !config.toolsUnsupported) {
+  if (selectedProvider(config)==='api' && !config.toolsUnsupported) {
     const messages = [...payload.messages];
     for (const step of context.recentSteps || []) {
       if (!toolNames.has(step.action?.type)) continue;
