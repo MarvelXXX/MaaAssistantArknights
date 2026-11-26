@@ -4,7 +4,14 @@ const $ = id => document.getElementById(id);
 const storeKey = 'arkpilot.settings.v1';
 let saved;
 try { saved = JSON.parse(localStorage.getItem(storeKey)) || {}; } catch { saved = {}; }
-let config = { url: saved.url || '', model: saved.model || '', key: '', vision: saved.vision !== false, limit: saved.limit || 24 };
+const defaultCodexModel='gpt-6.2-sol';
+let config = { provider:saved.provider || (saved.url ? 'api' : 'codex'), url: saved.url || '', apiModel: saved.model || '',
+  codexModel:saved.codexModel ?? defaultCodexModel,key: '', vision: saved.vision !== false, limit: saved.limit || 24 };
+function modelSettings(settings=config) {
+  const {provider,vision,limit}=settings;
+  return provider==='codex' ? {provider,model:settings.codexModel,vision,limit} :
+    {provider,url:settings.url,key:settings.key,model:settings.apiModel,vision,limit};
+}
 let controller = null;
 let queueControl = null;
 let previewController = null;
@@ -13,14 +20,14 @@ const history = [];
 $('mode').value = saved.researchOnly ? 'research' : saved.readOnly ? 'inspect' : 'operate';
 function persist() {
   // The API key and conversational content only live in this tab's memory.
-  saved = { url: config.url, model: config.model, vision: config.vision, limit: config.limit,
+  saved = { provider:config.provider,url: config.url, model: config.apiModel,codexModel:config.codexModel, vision: config.vision, limit: config.limit,
     serial: $('device').value || saved.serial, readOnly: $('mode').value === 'inspect',researchOnly:$('mode').value === 'research' };
   try { localStorage.setItem(storeKey, JSON.stringify(saved)); } catch {}
 }
 function modelStatus() {
-  $('modelLight').textContent = !config.url ? '模型待配置' : config.key ? '模型已配置' : '已配置模型地址';
-  $('modelLight').classList.toggle('ready', !!config.url);
-  $('modelLight').title = config.model || '';
+  $('modelLight').textContent = config.provider==='codex' ? 'Codex 订阅' : !config.url ? '模型待配置' : config.key ? '模型已配置' : '已配置模型地址';
+  $('modelLight').classList.toggle('ready', config.provider==='codex' || !!config.url);
+  $('modelLight').title = modelSettings().model || '';
 }
 async function post(route, data, signal) {
   const res = await fetch('/api/' + route, {
@@ -33,15 +40,32 @@ function configMessage(text, error = false) {
   $('configStatus').textContent = text;
   $('configStatus').classList.toggle('error-text', error);
 }
+let draftModels,editingProvider;
+function showProvider() {
+  editingProvider=$('provider').value;
+  const cli=editingProvider==='codex';
+  $('providerHint').textContent=cli ? '本机 codex exec 使用 ChatGPT 登录处理所选输入。首次使用可运行 codex login。' : '发送指令时，所选输入会提交到此模型 URL。';
+  $('apiFields').hidden=cli;
+  $('url').disabled=cli; $('key').disabled=cli;
+  $('model').value=draftModels[editingProvider];
+  $('modelOptions').replaceChildren(); $('fetchedModels').hidden=true;
+}
+$('provider').onchange=()=>{
+  draftModels[editingProvider]=$('model').value.trim();
+  showProvider(); configMessage('');
+};
 function openSettings(text = '') {
-  $('url').value = config.url; $('model').value = config.model; $('key').value = config.key;
+  draftModels={api:config.apiModel,codex:config.codexModel};
+  $('provider').value=config.provider; showProvider();
+  $('url').value = config.url; $('key').value = config.key;
   $('inputMode').value = config.vision ? 'vision' : 'text'; $('limit').value = String(config.limit);
   $('fetchedModels').hidden = true;
   configMessage(text);
   $('settings').showModal();
 }
 function formConfig() {
-  return { url: $('url').value.trim(), model: $('model').value.trim(), key: $('key').value.trim(),
+  draftModels[editingProvider]=$('model').value.trim();
+  return {provider:editingProvider,url: $('url').value.trim(), apiModel:draftModels.api,codexModel:draftModels.codex,key: $('key').value.trim(),
     vision: $('inputMode').value === 'vision', limit: Number($('limit').value) };
 }
 $('settingsBtn').onclick = () => openSettings();
@@ -50,7 +74,7 @@ $('settings').addEventListener('close', () => { $('key').value = ''; });
 $('configForm').onsubmit = event => {
   event.preventDefault();
   const draft = formConfig();
-  if (draft.url) {
+  if (draft.provider==='api' && draft.url) {
     const url = new URL(draft.url);
     if (!['https:', 'http:'].includes(url.protocol) || url.search || url.hash || url.username || url.password) {
       return configMessage('请填写 HTTP(S) 模型接口，密钥放入 API Key 字段。', true);
@@ -62,7 +86,9 @@ $('getModels').onclick = async () => {
   const button = $('getModels');
   button.disabled = true; configMessage('正在读取模型列表…');
   try {
-    const { models } = await (await post('models', formConfig())).json();
+    const settings=modelSettings(formConfig());
+    const { models } = await (await post('models', settings)).json();
+    if (editingProvider!==settings.provider || !$('settings').open) return;
     $('modelOptions').replaceChildren(...models.map(id => new Option(id, id)));
     $('fetchedModels').replaceChildren(new Option('选择可用模型…', ''), ...models.map(id => new Option(id, id)));
     $('fetchedModels').hidden = models.length < 2;
@@ -191,7 +217,7 @@ async function submit(event, native = null, label = '', existing = null) {
   const instruction = label || $('instruction').value.trim();
   if (!instruction || controller) return;
   native ??= nativeCommand(instruction);
-  if (!existing && !native && !config.url) { openSettings('填写模型服务地址后即可发送这条指令。'); return; }
+  if (!existing && !native && config.provider==='api' && !config.url) { openSettings('填写模型服务地址后即可发送这条指令。'); return; }
   const serial = existing?.serial || $('device').value;
   const researchOnly = $('mode').value === 'research';
   if (!serial && !researchOnly) { openSettings('操作游戏需要连接设备，查攻略可选择“仅查攻略”。'); return; }
@@ -207,7 +233,7 @@ async function submit(event, native = null, label = '', existing = null) {
   let end = false, step, applied = [];
   try {
     const res = existing ? await post('reward-queue/attach',{id:existing.id},local.signal) :
-      await post('run', { ...(native ? {} : config), ...guides.current(), native, serial, instruction, history: previous,
+      await post('run', { ...(native ? {} : modelSettings()), ...guides.current(), native, serial, instruction, history: previous,
         backgroundQueue:detached,researchOnly,readOnly: $('mode').value !== 'operate' }, local.signal);
     for await (const e of events(res)) {
       if (e.type === 'queue') {
@@ -286,7 +312,7 @@ $('clear').onclick = () => {
 document.querySelectorAll('[data-prompt]').forEach(button => {
   button.onclick = () => { $('instruction').value = button.dataset.prompt; $('instruction').focus(); };
 });
-const guides = setupGuides({post,events,getConfig:() => config,runDirect:(a,label) => submit(null,a,label)});
+const guides = setupGuides({post,events,getConfig:() => modelSettings(),runDirect:(a,label) => submit(null,a,label)});
 modelStatus();
 async function reconnectQueue(expectedId) {
   try {

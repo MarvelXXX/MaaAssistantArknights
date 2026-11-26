@@ -82,6 +82,12 @@ async function body(req, maxBytes = 524288) {
   throw new Error('请求需要 JSON 对象。');
 }
 function modelConfig(data) {
+  if (data.provider!=null && !['api','codex'].includes(data.provider)) throw new Error('未知的模型连接方式。');
+  if (data.provider==='codex') {
+    const model=data.model ?? '';
+    if (typeof model!=='string' || model.trim() && !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,149}$/.test(model.trim())) throw new Error('Codex 模型 ID 无效。');
+    return {provider:'codex',model:model.trim(),vision:data.vision!==false};
+  }
   for (const [key, max] of [['url', 2000], ['key', 4000], ['model', 250]]) {
     if (data[key] != null && (typeof data[key] !== 'string' || data[key].length > max)) throw new Error('模型配置格式有误。');
   }
@@ -421,7 +427,8 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const port = Number(process.env.ARK_PORT || 17321);
+  const local = parseEnv(await readFile(new URL('./.env',import.meta.url),'utf8').catch(()=>''));
+  const port = Number(process.env.ARK_PORT || local.ARK_PORT || 17321);
   const url = 'http://127.0.0.1:' + port;
   const open = process.argv.includes('--open') && process.platform === 'win32';
   const browser = () => {

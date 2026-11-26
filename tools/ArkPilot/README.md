@@ -13,7 +13,7 @@
    ~~~
 
 3. 在设备画面上方选中要操作的 ADB 设备。确认预览对应目标账号。MuMu 有时会为同一实例列出两个 ADB 连接。
-4. 打开 **连接设置**，填写 Model URL 和 API Key。接口使用 OpenAI 兼容的 Chat Completions 格式。URL 可以是服务根地址、带路径的 API 前缀或完整的 chat/completions 地址。根地址自动补 v1，本地免鉴权服务可留空 Key。
+4. 打开 **连接设置**，选择 **Codex 订阅（本机 CLI）** 或 **OpenAI 兼容 API**。订阅模式使用运行 ArkPilot 的系统用户的 ChatGPT 登录。首次使用先安装 Codex CLI，运行 `codex login` 并选择 ChatGPT 登录，再用 `codex login status` 核对。ArkPilot 通过 `codex exec` 传递指令和所选截图，使用订阅额度。CLI 需支持 `exec --ignore-user-config`，若不在 PATH，可设置环境变量 `ARK_CODEX_BIN` 为可执行文件的完整路径。使用 API 时填写 Model URL 和 API Key，地址支持服务根地址、API 前缀或完整的 chat/completions 地址。根地址自动补 v1，本地免鉴权服务可留空 Key。
 5. 点击 **获取模型** 或直接填写服务端模型 ID。仅列出一个模型的服务也可在发送时自动识别。有视觉能力的模型选 **截图 + OCR 与模板匹配结果**，纯文本模型选 **仅 OCR 与模板匹配结果**。
 6. 在对话框输入指令，回车发送，Shift + Enter 换行。**只读分析**适合查看局面，**允许操作**支持点击、滑动、返回和等待。
 
@@ -94,7 +94,7 @@ Windows OCR 提供屏幕文字与位置。视觉模型还可以直接判断图�
 
 程序自动查找 Android SDK、MuMu 的标准安装路径和 PATH 中的 adb。网络模拟器可在连接设置的设备选项中输入 ADB 地址，例如 127.0.0.1:16384，再点击 **连接**。设备离线或未授权时，先检查模拟器的 ADB 开关或安卓设备上的调试授权提示。
 
-可在启动前通过 PowerShell 指定路径和服务端口。
+可在启动前通过 PowerShell 指定路径和服务端口。要让桌面快捷方式每次都打开同一端口，也可在本目录的 `.env` 设置 `ARK_PORT`。
 
 ~~~powershell
 $env:ARK_ADB = 'D:\Android\platform-tools\adb.exe'

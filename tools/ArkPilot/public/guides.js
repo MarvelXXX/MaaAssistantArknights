@@ -283,7 +283,7 @@ export function setupGuides({post,events,getConfig,runDirect}) {
   };
   $('readClip').onclick = () => job('正在采样视频画面…', async signal => {
     const config = getConfig();
-    if (!config.url || !config.vision) throw new Error('请先在连接设置中配置支持图片输入的视觉模型。');
+    if ((config.provider!=='codex' && !config.url) || !config.vision) throw new Error('请先在连接设置中配置支持图片输入的视觉模型。');
     const frames = await clipFrames($('guideVideo'),signal);
     status('正在请视觉模型解读 ' + frames.length + ' 帧…');
     const result = await request('guides/frames',{...config,frames},signal);

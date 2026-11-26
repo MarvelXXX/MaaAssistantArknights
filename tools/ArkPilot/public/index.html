@@ -110,13 +110,16 @@
     <form id="configForm">
       <div class="modal-head"><h2>连接设置</h2><button type="button" class="close" id="closeSettings" aria-label="关闭设置">×</button></div>
       <fieldset><legend>模型服务</legend>
+        <label for="provider">连接方式</label><select id="provider"><option value="codex">Codex 订阅（本机 CLI）</option><option value="api">OpenAI 兼容 API</option></select>
+        <div id="apiFields">
         <label for="url">Model URL</label><input type="url" id="url" placeholder="https://your-provider.example/v1" autocomplete="off" spellcheck="false">
         <label for="key">API Key <small>仅在当前页面内存中使用</small></label><input type="password" id="key" placeholder="本地免鉴权模型可留空" autocomplete="off" spellcheck="false">
+        </div>
         <label for="model">模型 ID</label><div class="inline"><input id="model" list="modelOptions" placeholder="单模型服务可自动识别" autocomplete="off" spellcheck="false"><button type="button" id="getModels" class="outline">获取模型</button></div>
         <datalist id="modelOptions"></datalist>
         <select id="fetchedModels" aria-label="可用模型" hidden></select>
         <label for="inputMode">模型输入</label><select id="inputMode"><option value="vision">截图 + OCR 与模板匹配结果</option><option value="text">仅 OCR 与模板匹配结果</option></select>
-        <p class="hint">发送指令时，所选输入会提交到此模型 URL。</p>
+        <p class="hint" id="providerHint"></p>
       </fieldset>
       <details class="advanced"><summary>设备与执行选项</summary>
         <label for="address">ADB 连接地址</label><div class="inline"><input id="address" placeholder="127.0.0.1:16384" autocomplete="off"><button type="button" class="outline" id="connect">连接</button></div>
