@@ -25,6 +25,13 @@ export function baseInspectionInput(frame, action) {
   const atLabel = pattern => frame.anchors.some((a,i)=>a.box && pattern.test(labels[i]) &&
     action.x>=a.box[0]-2 && action.x<=a.box[0]+a.box[2]+2 && action.y>=a.box[1]-2 && action.y<=a.box[1]+a.box[3]+2);
   if (action.type!=='tap') return false;
+  // The CN base exit dialog uses an unlabelled checkmark in the red footer.
+  const exiting = frame.anchors.some((a,i)=>a.source==='OCR' && a.box &&
+    /^是否确认离开罗德岛基建[?？]?$/.test(labels[i]) &&
+    a.box[0]<frame.width/2 && a.box[0]+a.box[2]>frame.width/2 &&
+    a.box[1]>frame.height*0.36 && a.box[1]<frame.height*0.46);
+  if (exiting) return Math.abs(frame.width/frame.height-16/9)<0.015 &&
+    x>0.55 && x<0.91 && y>0.64 && y<0.73;
   const home=labels.includes('主界面设置入口');
   if (home) return (x>0.64 && y>0.77 && y<0.98 && atLabel(/基建|仓库/)) ||
     (x>0.72 && x<0.81 && y>0.80 && y<0.88);
@@ -231,7 +238,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
         result: typeof step.result === 'string' ? step.result : step.result?.error || '已查资料',
       }));
     }
-    if (inspectBase) context.baseInspection='基建只查看。总览里的整张贸易站与制造站卡片都可能直接收货。只用进驻总览查看和 back 返回；无安全入口就报告只看到了哪些证据。不可点房间卡片或通知。';
+    if (inspectBase) context.baseInspection='基建只查看。进驻总览里的整张房间卡片可能直接收货，请用 back 退出说明、总览和基建。仅当弹窗明确询问是否确认离开罗德岛基建时，点击右侧勾选按钮返回首页。不可点房间卡片或通知。';
     if (rejectedInput) context.rejectedInput = rejectedInput;
     let reply;
     try { reply = await plan(config, context, frame, signal); }
@@ -271,7 +278,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     }
     if (actionCount >= limit) throw new Error('已达到本次动作上限，目标尚未确认完成。');
     if (inspectBase && !baseInspectionInput(frame,action)) {
-      const reason='只读基建已拦截该区域。可点击进驻总览或使用 back 返回。';
+      const reason='只读基建已拦截该区域。可查看进驻总览，用 back 返回，并在离开罗德岛基建提示中点击右侧勾选按钮。';
       steps.push({turn,action,note,result:reason});
       emit({type:'stale',text:reason,turn});
       if (++blockedBaseInputs>=3) {emit({type:'end',outcome:'stop',goal,count:actionCount,note:reason});return;}
