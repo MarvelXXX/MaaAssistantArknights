@@ -330,6 +330,16 @@ export async function verifyWalletAccount(capture, uid) {
 
 const numbers = wallet => ({prime:wallet.prime, orundum:wallet.orundum, ...(wallet.sanity == null ? {} : {sanity:wallet.sanity})});
 
+export function rewardWalletContext(before, current, previousNote) {
+  const balance = wallet => wallet.prime+' 源石、'+wallet.orundum+' 合成玉';
+  let context = '本项目标开始时首页实测余额为 '+balance(before)+'。本项收益只比较这个起点和结束时的首页余额。';
+  if (before.prime !== current.prime || before.orundum !== current.orundum) {
+    context += '恢复任务时首页实测为 '+balance(current)+'，请结合本关结算或完成标志核对。';
+  }
+  if (previousNote) context += '以下历史记录仅用于定位关卡、材料和作业，里面的余额属于上次核查：'+previousNote.slice(0,450)+'。';
+  return context;
+}
+
 export function renderProgress(manifest, ledger) {
   const titles = new Map(manifest.targets.map(t=>[t.id,t.label.replace(/[|\r\n]/g,' ')]));
   const rows = Object.entries(ledger.items).filter(([id])=>titles.has(id));
@@ -571,7 +581,7 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       if (t.claimAvailable) caution = '上轮中断，先核实本项是否已领取，以及是否还有未领取档位。';
       else caution = credited ? '上次中断后余额已增加对应金额。仅去本关详情核对完成标志，不得再次开战。' : '上轮中断，务必先核对本关已领取状态。';
     }
-    const previousNote = previous.note ? '上次观察：'+previous.note.slice(0,450)+'。' : '';
+    const walletContext = rewardWalletContext(before,wallet,previous.note);
     const avoid = failed.size ? '之前未通过的作业号：'+[...failed].join('、')+'。' : '';
     try {
       let guide = t.plan;
@@ -588,9 +598,9 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       const annihilation = t.stage?.startsWith('camp_') ? '本项核查剿灭数的一次性奖励。旧剿灭的剿灭战模拟也可打进度奖励。先在情报汇总核对档位、开启时间和开始行动按钮。周报酬已满或当前委托是另一张地图仍可打已开放的模拟。' : '';
       const instructions = t.claimAvailable
         ? '在指定入口领取免费奖励。任务有连续档位时，收取当前已完成的任务活跃度，确认随附物资，再查看新出现的可领档位，直到目标货币到账或确无可领进度。记录目标货币数量和领取画面并返回首页。finish 用“领取已核”报告目标奖励到账，用“原已完成”报告此前已领或入口已清空。尚未达标时用“未完成”并写出实际剩余条件。'
-        : (previous.note ? '更换失败的作业或阵容。' : '')+
+        : (failed.size ? '更换失败的作业或阵容。' : '')+
           '先确认目标关号、模式和账号完成状态。已完成就跳过。仅打一遍正式作战，普通关用相符作业、自动编队或按名册适配，剧情可免费跳过。结算/奖励/已完成标志须由实机核实。就此返回首页，勿领其他奖励。finish 的 note 必须从以下之一开始：首通已核、原已完成、理智不足、结晶不足、入口关闭、未完成，再写证据及失败作业号。若理智不足且画面可读，请写“理智不足，当前理智 X，关卡需 Y”。';
-      report = await play('本轮只处理 '+t.label+'。'+t.route+'。'+caution+previousNote+avoid+loaded+annihilation+instructions+spendRule,{
+      report = await play('本轮只处理 '+t.label+'。'+walletContext+caution+t.route+'。'+avoid+loaded+annihilation+instructions+spendRule,{
           limit:75, ap:t.ap, expectedStage:t.stage, guide, guideId:guide ? candidate : undefined, onGuideStart:id=>{usedGuide=id;},
           resumeAfterStep:t.resumeAfterStep, allowNative:!credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
           onStageEvent:evidence.observe,

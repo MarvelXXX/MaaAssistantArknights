@@ -1,7 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dismissStoneRecovery, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForWalletModel} from '../lib/reward-queue.mjs';
+import {dismissStoneRecovery, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, rewardWalletContext, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForWalletModel} from '../lib/reward-queue.mjs';
 import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
+
+test('同关重试锚定当轮起点，恢复中断保留原始起点及最新余额', () => {
+  const wallet = {prime:167, orundum:27078};
+  const prior = '未完成，缺芯片，上次首页合成玉为 26878';
+  const retry = rewardWalletContext(wallet,wallet,prior);
+  assert.match(retry,/开始时首页实测余额为 167 源石、27078 合成玉/);
+  assert.match(retry,/历史记录.*上次核查.*26878/);
+  assert.doesNotMatch(retry,/恢复任务/);
+  const resumed = rewardWalletContext(wallet,{prime:167,orundum:27278});
+  assert.match(resumed,/开始时首页实测余额为 167 源石、27078 合成玉/);
+  assert.match(resumed,/恢复任务时首页实测为 167 源石、27278 合成玉/);
+  assert.doesNotMatch(resumed,/历史记录/);
+});
 
 test('余额读取遇到临时断连时重新截图，错误凭据、离开首页和主动停止立即返回',async()=>{
   const controller=new AbortController(), waits=[];
