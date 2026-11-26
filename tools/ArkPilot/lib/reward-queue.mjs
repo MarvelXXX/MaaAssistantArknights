@@ -296,15 +296,20 @@ function balanceDetail(image) {
   return 'data:image/jpeg;base64,'+jpeg.encode({width,height,data},94).data.toString('base64');
 }
 
+export function isRewardHome(frame) {
+  const text=frame.anchors.filter(a=>a.source==='OCR').map(a=>a.label.replace(/\s/g,''));
+  // The quick menu repeats the names of the home tiles over the current scene.
+  if (text.includes('首页')) return false;
+  if (frame.anchors.some(a=>a.source==='Maa' && a.label==='主界面设置入口')) return true;
+  return text.some(s=>/当前理智|理智[/／]\d/.test(s)) && text.some(s=>/角色管理|公开招募|采购中心/.test(s));
+}
+
 async function captureWallet(device, config, signal) {
   let frame;
   for (let attempt=0;attempt<3;attempt++) {
     frame = await recognize(await device.capture(signal), signal);
     if (stoneRecovery(frame.anchors)) throw Object.assign(new Error('正在显示源石恢复理智的确认框。'),{code:'STONE_RECOVERY'});
-    const labels = frame.anchors.map(a=>a.label).join('').replace(/\s/g,'');
-    const home = frame.anchors.some(a=>a.source==='Maa' && a.label==='主界面设置入口') ||
-      /干员|角色管理/.test(labels) && /基建|终端|采购中心/.test(labels);
-    if (home) break;
+    if (isRewardHome(frame)) break;
     if (attempt === 2) throw Object.assign(new Error('当前截图不是可核对余额的首页。'), {code:'NOT_HOME'});
     await delay(650,undefined,{signal});
   }
