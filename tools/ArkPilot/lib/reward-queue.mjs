@@ -429,10 +429,10 @@ export function rewardEvidence(stage, claimAvailable = false, paradoxName) {
       // The home navigation overlay leaves the stage and its reward text visible underneath.
       if (text.includes('公开招募') && /采购中心|干员寻访|档案/.test(text)) return;
       let score;
-      if (claimAvailable && text.includes('获得物资') && /至纯源石|合成玉/.test(text)) score = 5;
-      else if (battleSeen && completedParadox(event.anchors,paradoxName)) score = 5;
-      else if (text.includes(stage?.endsWith('#f#') ? '磨难结算标志' : '结算三星标志') && text.includes('首次掉落')) score = 4;
-      else if (/获得物资|结算三星标志|结算二星标志|磨难结算标志|行动结束/.test(text)) score = 3;
+      if (claimAvailable && text.includes('获得物资') && /至纯源石|合成玉/.test(text)) score = 6;
+      else if (battleSeen && completedParadox(event.anchors,paradoxName)) score = 6;
+      else if (text.includes(stage?.endsWith('#f#') ? '磨难结算标志' : '结算三星标志')) score = text.includes('首次掉落') ? 5 : 4;
+      else if (/获得物资|结算二星标志|行动结束/.test(text)) score = 3;
       else if (text.includes('已完成模拟作战')) score = 2;
       else if (battleSeen && stage?.startsWith('mem_') && /悖论模拟开始按钮|开始模拟/.test(text)) score = 1;
       if (score && (!best || score > best.score)) best = {score,kind:score === 1 ? 'stage' : 'result',preview:event.preview,anchors:event.anchors};

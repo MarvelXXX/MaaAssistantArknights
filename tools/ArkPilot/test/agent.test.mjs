@@ -96,6 +96,23 @@ function fixture(results, overrides = {}) {
   return { inputs, emitted, abort, params };
 }
 
+test('结算动画结束后才规划和发出截图，留在同一结算页只等一次', async () => {
+  const ratings = ['结算二星标志','结算三星标志','结算三星标志'];
+  const seen = [], waits = [];
+  const f = fixture([], {
+    observe: async () => ({...frame, anchors:[{label:ratings.shift()}]}),
+    pause: async ms => waits.push(ms),
+    plan: async (_config, _context, stable) => {
+      seen.push(stable.anchors[0].label);
+      return answer(seen.length === 1 ? {type:'wait',ms:300} : {type:'finish'});
+    },
+  });
+  await runAgent(f.params);
+  assert.deepEqual(seen,['结算三星标志','结算三星标志']);
+  assert.deepEqual(waits,[4500,300]);
+  assert.deepEqual(f.emitted.filter(e=>e.type==='frame').map(e=>e.anchors[0].label),seen);
+});
+
 test('视频执行记录保留实际匹配的分 P', async () => {
   const f = fixture([{type:'analyze_video',bv:'BV1uE421A7jm',stage:'AS-MO-1'},{type:'finish'}],{
     device:null,readOnly:true,lookupGuide:async ()=>({part:8,timestamps:[10.5,15.5]}),
