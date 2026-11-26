@@ -8,9 +8,9 @@ import { pathToFileURL } from 'node:url';
 import { parseEnv } from 'node:util';
 import path from 'node:path';
 import { listDevices, connectDevice, selectDevice } from './lib/device.mjs';
-import { recognize } from './lib/vision.mjs';
+import { isPracticeFormation, recognize } from './lib/vision.mjs';
 import { chooseModel, listModels, explainFrames, proposeTeam } from './lib/model.mjs';
-import { runAgent } from './lib/agent.mjs';
+import { requestsPracticeOnly, runAgent } from './lib/agent.mjs';
 import { chapterRewards, stageRewards } from './lib/rewards.mjs';
 import { briefPlan, checkPlan, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, roguelikePlacements, searchGuides } from './lib/guides.mjs';
 import { executeMaa, maaHome, nativeAction, pausedBattleFrame, recognizeRecording, scanRoster, watchBattlePause, watchDaemonSelection, watchTutorialDialog } from './lib/maa.mjs';
@@ -254,7 +254,13 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         async function runCommand({instruction, signal, emit, history = [], guide = null, guideId, onGuideStart, resumeAfterStep, limit, expectedStage, intelExchange, inspectBase, allowNative = true, fixedTeam = false}) {
           let adaptationBlocked = false;
           let formation = !fixedTeam && data.formation === true;
+          // First-clear instructions may describe earlier rehearsals as evidence.
+          const practiceOnly = !queue && requestsPracticeOnly(instruction);
           const runNative = async (a, afterStep) => {
+            if (practiceOnly && ['Fight','Copilot','ParadoxCopilot'].includes(a.task) &&
+                (a.task!=='Copilot' || !isPracticeFormation(await devicePreview(device,signal)))) {
+              throw Object.assign(new Error('本次只演习。请从关卡详情点演习，停在有蓝色 PLAN 按钮的编队页再调用 Copilot。'),{beforeStart:true});
+            }
             if (expectedStage && (!['Copilot','ParadoxCopilot'].includes(a.task) || !await matchesRewardStage(guide,expectedStage))) {
               throw Object.assign(new Error('当前作业不是本项首通目标，请用准确的关卡 ID 重新载入。'),{beforeStart:true});
             }
@@ -305,7 +311,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             try {
               if (guideId) onGuideStart?.(guideId);
               const selected = new Set();
-              await native(a, {home,device,serial:data.serial,guide,formation,borrowSupport:!!supportSlot,afterStep,signal:watching,progress:(text,evidence)=>{
+              await native(a, {home,device,serial:data.serial,guide,formation,practiceOnly,borrowSupport:!!supportSlot,afterStep,signal:watching,progress:(text,evidence)=>{
                 if (evidence?.selectedOperator) selected.add(evidence.selectedOperator);
                 phase = text;
                 emit({type:'core',text});
@@ -404,7 +410,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             await runNative({type:'maa',task:'Copilot'},step);
             return 'Maa 已执行后续作业，请核对同一局的结算。';
           } : undefined;
-          await runAgent({ config, device, instruction, history, continueBattle, intelExchange, inspectBase, retryModel:queue, requireAdaptation:queue ? false : undefined,
+          await runAgent({ config, device, instruction, history, continueBattle, intelExchange, inspectBase, practiceOnly, retryModel:queue, requireAdaptation:queue ? false : undefined,
             readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home && allowNative ? runNative : null });
         }
         if (queue) {

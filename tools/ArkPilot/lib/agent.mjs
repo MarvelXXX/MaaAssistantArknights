@@ -1,12 +1,17 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { hasFacingPrompt, intelBalanceCrop, intelShopStock, recognize, sameReadyOperator, stillMatches } from './vision.mjs';
+import { hasFacingPrompt, intelBalanceCrop, intelShopStock, isPracticeFormation, recognize, sameReadyOperator, stillMatches } from './vision.mjs';
 import { deploymentTarget } from './guides.mjs';
 import { decide } from './model.mjs';
 import { nativeAction } from './maa.mjs';
 
 const endTypes = new Set(['finish', 'ask', 'stop']);
 const researchTools = new Set(['find_guide','load_guide','adapt_guide','search_web','read_wiki','analyze_video','stage_rewards','chapter_rewards','roguelike_placements']);
-const noPremiumSpend = /(?:禁止|不得|不能|不可|不要|不许|不准|不|别)(?:再|额外)?(?:消耗|花费|使用|花|用|动用)[^，。；;\n]{0,16}(?:源石|合成玉)|(?:源石|合成玉)[^，。；;\n]{0,12}(?:不能|不可|不许|禁止)(?:花|用|消耗)|(?:do not|don't|never)\s+(?:use|spend)\s+(?:any\s+)?(?:originite|orundum)/iu;
+const noPremiumSpend = /(?:禁止|不得|不能|不可|不要|不许|不准|不|别)(?:再|额外)?(?:消耗|花费|使用|花|用|动用)[^，。；;\n]{0,16}(?:源石|合成玉)|(?:源石|合成玉)[^，。；;\n]{0,12}(?:不能|不可|不许|禁止|不)(?:花|用|消耗)|(?:do not|don't|never)\s+(?:use|spend)\s+(?:any\s+)?(?:originite|orundum)/iu;
+export function requestsPracticeOnly(instruction) {
+  if (!/演习|演练|\b(?:practice|rehearsal)\b/iu.test(instruction)) return false;
+  return !/(?:无需|不用|跳过|略过|不要)(?:再|再次)?(?:演习|演练)|(?:然后|随后|之后|再|直接|改为|改打|转入)(?:打|进行|开始)?正式(?:作战|战斗|挑战|开战|首通)?|(?:then|followed by)\s+(?:a\s+)?(?:real|normal|live)\s+(?:run|battle)/iu.test(instruction);
+}
+
 function premiumConfirmation(frame) {
   const labels = frame.anchors.map(anchor => anchor.label || '');
   if (frame.anchors.some(anchor => anchor.source === 'Maa' && anchor.label === '源石恢复提示')) return true;
@@ -215,12 +220,12 @@ async function deployFromGuide(action, guide, frame, device, signal, pause) {
   return true;
 }
 
-export async function runAgent({ config, device, instruction, history, readOnly, limit, signal, emit,
+export async function runAgent({ config, device, instruction, history, readOnly, limit, signal, emit, practiceOnly = requestsPracticeOnly(instruction),
   runNative, guidance, lookupGuide, continueBattle, intelExchange, inspectBase=requestsBaseInspection(instruction), retryModel = false, requireAdaptation = wantsAdaptedPlan(instruction),
   observe = recognize, plan = decide, matches = stillMatches, pause = (ms, s) => delay(ms, undefined, { signal: s }) }) {
   const steps = [];
   const attemptedTasks = new Set();
-  const protectsCurrency = noPremiumSpend.test(instruction);
+  const protectsCurrency = practiceOnly || noPremiumSpend.test(instruction);
   let submittedExchange = false;
   let blockedBaseInputs=0;
   async function observeGame(raw) {
@@ -288,6 +293,13 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       else if (!adaptation.ready) decision = {...decision,note:adaptation.reason || adaptation.error || '未生成适配作业。',action:{type:'ask'}};
     }
     const { action, note, goal } = decision;
+    if (practiceOnly && action.type==='tap' && action.x>frame.width*0.77 && action.x<frame.width*0.96 && action.y>frame.height*0.44 && action.y<frame.height*0.97 &&
+        frame.anchors.some(a=>a.label==='编队页开始行动' || /快捷编队|QUICK FORMATION/i.test(a.label)) && !isPracticeFormation(frame)) {
+      steps.push({turn,action,note,result:'当前编队缺少演习 PLAN 标志。回关卡详情点演习，再从蓝色 PLAN 编队页执行作业。'});
+      emit({type:'stale',text:'已拦截普通编队页的开始行动。',turn});
+      actionCount++;
+      continue;
+    }
     if (protectsCurrency && ['tap','swipe','deploy','maa'].includes(action.type) && premiumConfirmation(frame)) {
       emit({type:'end', outcome:'stop', goal, count:actionCount,
         note:'识别到源石恢复或货币消费确认界面，已按本轮禁用货币的要求停止输入。'});
