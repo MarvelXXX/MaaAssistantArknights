@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dismissStoneRecovery, nextRewardGuide, reconcileReward, refreshSanityWait, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
+import {dismissStoneRecovery, nextRewardGuide, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount} from '../lib/reward-queue.mjs';
 import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
+
+test('重试记录按上次结算状态展示旧截图，并兼容缺少上次状态的存档',()=>{
+  const manifest={targets:[{id:'stage',label:'SL-MO-1'}]};
+  const row={status:'进行中',lastStatus:'未完成',at:'2026-11-26T00:34:00Z',after:{prime:153,orundum:23478}};
+  const report=()=>renderProgress(manifest,{items:{stage:row}});
+  assert.match(report(),/最近开始核查的目标为 SL-MO-1/);
+  assert.ok(report().includes('[未完成](stage-home.jpg)'));
+  delete row.lastStatus;
+  assert.ok(report().includes('[上次核查](stage-home.jpg)'));
+  delete row.at;
+  assert.ok(!report().includes('stage-home.jpg'));
+});
 
 test('摆完挂机后仅对持续敞开的同一名干员面板交回控制', () => {
   const watch=watchDaemonSelection({opers:[{name:'星熊'}],groups:[{opers:[{name:'红'}]}]});

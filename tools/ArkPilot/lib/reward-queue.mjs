@@ -232,7 +232,7 @@ export async function verifyWalletAccount(capture, uid) {
 
 const numbers = wallet => ({prime:wallet.prime, orundum:wallet.orundum, ...(wallet.sanity == null ? {} : {sanity:wallet.sanity})});
 
-function renderProgress(manifest, ledger) {
+export function renderProgress(manifest, ledger) {
   const titles = new Map(manifest.targets.map(t=>[t.id,t.label.replace(/[|\r\n]/g,' ')]));
   const rows = Object.entries(ledger.items).filter(([id])=>titles.has(id));
   const cleared = rows.filter(([,r])=>r.status==='首通已核').length;
@@ -248,7 +248,8 @@ function renderProgress(manifest, ledger) {
     '', '| 时间（北京时间） | 关卡 | 核验结果 | 源石 | 合成玉 |','| --- | --- | --- | ---: | ---: |'];
   for (const [id,row] of finished) {
     const at = new Date(row.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
-    const walletLink = '['+row.status+']('+encodeURIComponent(id+'-home.jpg')+')';
+    const result = row.status === '进行中' ? (row.lastStatus || '上次核查') : row.status;
+    const walletLink = '['+result+']('+encodeURIComponent(id+'-home.jpg')+')';
     const label = {result:'结算画面',stage:'战后关卡'}[row.evidence];
     const proofLink = label ? ' · ['+label+']('+encodeURIComponent(id+'-'+row.evidence+'.jpg')+')' : '';
     lines.push('| '+at+' | '+titles.get(id)+' | '+walletLink+proofLink+' | '+row.after.prime+' | '+row.after.orundum+' |');
@@ -419,6 +420,8 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     const before = previous.status === '进行中' && previous.before ? previous.before : numbers(wallet);
     const attempts = (previous.attempts || 0) + 1;
     ledger.items[t.id] = {...previous, status:'进行中', attempts, before, started:new Date().toISOString()};
+    // The existing timestamp, balance and screenshots belong to the last settled attempt.
+    if (previous.at && previous.status !== '进行中') ledger.items[t.id].lastStatus = previous.status;
     await save();
     notify(t.label+'，第 '+attempts+' 次核查。');
     const evidence = rewardEvidence(t.stage,t.claimAvailable);
