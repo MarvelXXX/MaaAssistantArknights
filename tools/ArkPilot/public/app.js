@@ -157,7 +157,7 @@ function addStep(text) {
 }
 function actionName(a) {
   switch (a.type) {
-    case 'maa': return 'Maa · ' + a.task + (a.stage ? ' ' + a.stage + ' × ' + a.times : '');
+    case 'maa': return 'Maa · ' + a.task + (a.stage ? ' ' + a.stage : '') + (a.times ? ' × ' + a.times : '');
     case 'find_guide': return '搜索 ' + a.stage + ' 作业';
     case 'stage_rewards': return '核对关卡奖励 · ' + a.stage;
     case 'chapter_rewards': return '核对章节奖励 · ' + a.stage;

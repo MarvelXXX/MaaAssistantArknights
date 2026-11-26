@@ -94,6 +94,17 @@ export async function chapterRewards(query, signal) {
   return {...matchChapterRewards(query, stage, zone.zones, archive, activity, Date.now()/1000), sources:names.map(sourceLink)};
 }
 
+export async function archiveStage(code, signal) {
+  const archive = await table('retro_table',signal);
+  const matches = Object.values(archive.stageList).filter(stage=>stage.code===code && stage.difficulty==='NORMAL');
+  if (matches.length !== 1) throw new Error('未找到唯一的常驻活动普通关卡 '+code+'。');
+  const [stage] = matches;
+  const chapter = archive.retroActList[archive.zoneToRetro[stage.zoneId]];
+  if (!chapter || chapter.startTime>Date.now()/1000) throw new Error('这项活动尚未收录。');
+  const englishTitle = chapter.retroId.replace(/^permanent_(?:sub|main)_\d+_/,'').replaceAll('_',' ');
+  return {code,chapter:chapter.name,englishTitle,name:stage.name};
+}
+
 export function matchSimulations(query, stages, operators) {
   const key = query.trim().toUpperCase();
   const names = new Map(operators.map(operator => [operator.id,operator.name]));

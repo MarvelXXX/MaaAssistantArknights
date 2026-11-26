@@ -38,6 +38,28 @@ function grayMat(image) {
   return gray;
 }
 
+const archiveTemplates = new Map();
+export async function archiveCard(frame, stageCode) {
+  const prefix=stageCode.split('-')[0];
+  if (!['GO','CV'].includes(prefix) || Math.abs(frame.width/frame.height-16/9)>0.04) return null;
+  await ready;
+  if (!archiveTemplates.has(prefix)) {
+    const bytes=await readFile(new URL('./archive-templates/'+prefix+'.png',import.meta.url));
+    archiveTemplates.set(prefix,grayMat(pixels(bytes)));
+  }
+  const template=archiveTemplates.get(prefix),scale=720/frame.width;
+  const gray=grayMat(frame.image),reference=new cv.Mat(),result=new cv.Mat();
+  try {
+    cv.resize(gray,reference,new cv.Size(720,Math.round(frame.height*scale)),0,0,cv.INTER_AREA);
+    cv.matchTemplate(reference,template,result,cv.TM_CCOEFF_NORMED);
+    const {maxVal,maxLoc}=cv.minMaxLoc(result);
+    if (maxVal<0.85 || maxLoc.y<reference.rows*0.1) return null;
+    return {x:Math.round((maxLoc.x+template.cols/2)/scale),y:Math.round((maxLoc.y+template.rows/2)/scale)};
+  } finally {
+    result.delete(); reference.delete(); gray.delete();
+  }
+}
+
 let templatesPromise;
 async function loadTemplates() {
   const tasks = JSON.parse(await readFile(path.join(resource, 'tasks', 'tasks.json'), 'utf8'));

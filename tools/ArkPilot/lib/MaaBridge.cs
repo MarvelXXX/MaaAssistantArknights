@@ -58,6 +58,9 @@ public static class MaaBridge
         Require(AsstLoadResource(Utf8(home)) != 0, "AsstLoadResource");
         if (!String.IsNullOrEmpty(client) && client != "Official" && client != "Bilibili")
             Require(AsstLoadResource(Utf8(Path.Combine(home, "resource", "global", client))) != 0, "global resources");
+        string overlay = Path.Combine(work, "overlay");
+        if (Directory.Exists(overlay))
+            Require(AsstLoadResource(Utf8(overlay)) != 0, "ArkPilot navigation resources");
         if (cancelled) throw new OperationCanceledException();
         IntPtr handle = AsstCreateEx(OnMessage, IntPtr.Zero);
         Require(handle != IntPtr.Zero, "AsstCreateEx");

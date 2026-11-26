@@ -9,12 +9,27 @@ import { copilotDefeatReport, nativeAction, paradoxNavigationPlan, recognizedDef
 import { normalizeRoster, rosterFit } from '../lib/roster.mjs';
 import { runAgent, validateDecision } from '../lib/agent.mjs';
 import { explainFrames } from '../lib/model.mjs';
+import { matchesArchiveTitle } from '../lib/archive-navigation.mjs';
+import { nativeCommand } from '../public/native-commands.js';
 
 const plan = {stage_name:'main_01-07', opers:[{name:'令',skill:3}], actions:[
   {type:'Deploy',name:'令',location:[2,3],direction:'Right'}, {type:'Skill',name:'令',kills:12},
 ]};
 const getSignal = () => AbortSignal.timeout(10000);
 const reply = (action,intent='operate') => ({intent,goal:'查作业',note:'核对结果',action});
+
+test('常驻地图指令限定普通关号，曲谱可识别国服活动的英文标志', () => {
+  const action=nativeCommand('/定位活动关卡 go-1');
+  assert.deepEqual(action,{task:'ArchiveStage',stage:'GO-1'});
+  assert.deepEqual(nativeCommand('/定位活动关卡 go-tr-1'),{task:'ArchiveStage',stage:'GO-TR-1'});
+  assert.deepEqual(nativeAction({...action,times:4,task_names:['Fight']},false),{type:'maa',...action});
+  assert.equal(nativeCommand('/定位活动关卡 GO-1-Hard'),null);
+  assert.throws(()=>nativeAction({task:'ArchiveStage',stage:'GO-1@Fight'},false));
+  const target={chapter:'追迹日落以西',englishTitle:'Ending A Grand Overture'};
+  assert.equal(matchesArchiveTitle('A GRAND OVERTURE',target),true);
+  assert.equal(matchesArchiveTitle('追 迹 日 落 以 西',target),true);
+  assert.equal(matchesArchiveTitle('OVERTURE',target),false);
+});
 
 test('原生任务链结束时保留实战失败回调与最近一次有效击倒数', async t => {
   const defeat = {details:{task:'FightMissionFailed-Bypass',result:{text:'任务失败'}}};

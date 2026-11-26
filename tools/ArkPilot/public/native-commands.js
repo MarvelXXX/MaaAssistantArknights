@@ -9,5 +9,7 @@ const commands = new Map([
 
 export function nativeCommand(instruction) {
   const task = commands.get(instruction);
+  const stage = /^\/定位活动关卡\s+([A-Z]{1,4}-(?:TR-)?[1-9]\d?)$/i.exec(instruction || '')?.[1];
+  if (stage) return {task:'ArchiveStage',stage:stage.toUpperCase()};
   return task ? {task} : null;
 }

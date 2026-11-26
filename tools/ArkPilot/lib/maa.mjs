@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { createWriteStream, existsSync } from 'node:fs';
-import { mkdtemp, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -12,6 +12,8 @@ import { adbPath } from './device.mjs';
 import { checkPlan, paradoxStageId } from './guides.mjs';
 import { characters } from './roster.mjs';
 import { recognize } from './vision.mjs';
+import { archiveStage } from './rewards.mjs';
+import { navigateArchive } from './archive-navigation.mjs';
 
 const worker = fileURLToPath(new URL('./maa-worker.ps1', import.meta.url));
 const execute = promisify(execFile);
@@ -36,6 +38,9 @@ export async function maaHome() {
 }
 
 export function nativeAction(a, hasPlan) {
+  if (a?.task === 'ArchiveStage' && typeof a.stage==='string' && /^[A-Z]{1,4}-(?:TR-)?[1-9]\d?$/i.test(a.stage)) {
+    return {type:'maa',task:'ArchiveStage',stage:a.stage.toUpperCase()};
+  }
   if (a?.task === 'ParadoxCopilot' && hasPlan && a.skill !== undefined) {
     if (!Number.isInteger(a.skill) || a.skill < 1 || a.skill > 3) throw new Error('悖论技能序号应为 1 至 3。');
     return { type:'maa', task:a.task, skill:a.skill };
@@ -263,6 +268,17 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
   return workspace(async work => {
     let params, stageTask;
     let type = a.task;
+    if (type === 'ArchiveStage') {
+      const target = await archiveStage(a.stage,signal);
+      const tasks = path.join(work,'overlay','resource','tasks');
+      await mkdir(tasks,{recursive:true});
+      await writeFile(path.join(tasks,'arkpilot.json'),JSON.stringify({
+        ArkPilotArchiveMapNode:{baseTask:'SideStoryStage',text:[target.code],fullMatch:true,next:[]},
+        ArkPilotArchiveStageCode:{baseTask:'SideStoryStage',text:[target.code],roi:[670,35,590,360],fullMatch:true,action:'DoNothing',next:[]},
+      }));
+      const step = task => connectedCore({home,work,serial,type:'Custom',params:{task_names:[task]}},device,signal,progress);
+      return navigateArchive(target,device,signal,step,progress);
+    }
     if (a.task === 'Fight') params = {stage:a.stage, times:a.times, medicine:0, stone:0, expiring_medicine:0, medicine_expire_days:0};
     if (navigationTasks.has(a.task)) {
       type = 'Custom';
