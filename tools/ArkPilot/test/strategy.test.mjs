@@ -7,6 +7,7 @@ import { searchWeb } from '../lib/research.mjs';
 import { decide } from '../lib/model.mjs';
 import { runAgent } from '../lib/agent.mjs';
 import { createServer } from '../server.mjs';
+import { mergeRosterScan } from '../public/guides.js';
 
 const author = {stage_name:'main_01-07',opers:[{name:'能天使',skill:1,requirements:{elite:1,level:40}}],
   groups:[{name:'回费位',opers:[{name:'芬',skill:1},{name:'讯使',skill:1}]}],actions:[
@@ -17,6 +18,18 @@ const box = {operators:[{name:'能天使',owned:false},{name:'克洛丝',elite:1
 const proposal = {status:'ready',reason:'采用同为速射手的克洛丝和组内先锋；验证右侧射程覆盖。',picks:[
   {slot:'能天使',id:'char_124_kroos',basedOn:'能天使',skill:1},
   {slot:'回费位',id:'char_198_blackd',basedOn:'讯使',skill:1}],edits:[{step:2,location:[3,1],direction:'Right',costs:12}]};
+
+test('局部扫描更新等级、保留未扫到的干员和手填技能，完整扫描替换名单',()=>{
+  const old={complete:true,operators:[{id:'typhon',owned:true,level:80},{id:'durin',owned:true,level:1,skill_level:1}]};
+  const seen=[{id:'durin',owned:true,level:30},{id:'new',owned:true,level:20}];
+  const partial=mergeRosterScan(old,{complete:false,operators:seen});
+  assert.equal(partial.complete,false);
+  assert.deepEqual(partial.operators,[{...old.operators[1],level:30},seen[1],old.operators[0]]);
+  assert.deepEqual(mergeRosterScan(old,partial),partial);
+  assert.deepEqual(mergeRosterScan(old,{complete:true,operators:seen}).operators,partial.operators.slice(0,2));
+  assert.deepEqual(mergeRosterScan(undefined,{complete:false,operators:seen}).operators,seen);
+  assert.equal(old.operators[1].level,1);
+});
 
 test('名册区分未持有、未知、技能未解锁、专精未知与已记录的专精',async()=>{
   const roster = await normalizeRoster(box);

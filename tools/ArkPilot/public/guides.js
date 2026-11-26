@@ -52,6 +52,17 @@ async function clipFrames(video, signal) {
   return frames;
 }
 
+export function mergeRosterScan(previous, scan) {
+  const saved = new Map((previous?.operators || []).map(op=>[op.id,op]));
+  const operators = scan.operators.map(op=>{
+    const merged = {...saved.get(op.id),...op};
+    saved.delete(op.id);
+    return merged;
+  });
+  if (!scan.complete) operators.push(...saved.values());
+  return {...scan,operators};
+}
+
 export function setupGuides({post,events,getConfig,runDirect}) {
   let plan = null, source = '', mediaUrl = '', pending = null, relatedVideo = null, onlineVideo = null, recentSearch = [];
   let beforeAdapt = null;
@@ -171,10 +182,11 @@ export function setupGuides({post,events,getConfig,runDirect}) {
     saveRoster(roster,profileName()); status('已导入名册。');
   });
   $('scanBox').onclick = () => job('Maa 正在翻页识别干员…',async signal=>{
+    const name = profileName();
     const roster = await request('roster/scan',{serial:$('device').value,readOnly:$('mode').value !== 'operate'},signal);
-    const old = new Map((profiles.get(profileName())?.roster.operators || []).map(o=>[o.id,o]));
-    roster.operators = roster.operators.map(o=>({...old.get(o.id),...o}));
-    saveRoster(roster,profileName()); status('已保存扫描结果，可补填技能资料并核对名册完整性。');
+    const merged = mergeRosterScan(profiles.get(name)?.roster,roster);
+    saveRoster(merged,name);
+    status('本次识别 '+roster.operators.length+' 条，账号名册已保存 '+merged.operators.length+' 条。');
   });
   $('adaptPlan').onclick = () => job('正在核对练度并生成替补部署…',async signal=>{
     if (!currentRoster()) { $('libraryType').value='roster'; showSections(); throw new Error('请先扫描或导入当前账号的干员。'); }
