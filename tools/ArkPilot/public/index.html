@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#121a20">
+  <title>ArkPilot · 明日方舟指令台</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="logo" aria-hidden="true"></span>ArkPilot</div>
+    <span class="product">明日方舟助手</span>
+    <div class="head-actions"><span class="light" id="modelLight">模型待配置</span><button id="settingsBtn" class="outline">连接设置</button></div>
+  </header>
+  <main>
+    <section class="chat pane" aria-labelledby="chatTitle">
+      <div class="pane-head"><h1 id="chatTitle">指令台</h1><div><button id="libraryBtn" class="outline">攻略与 Maa</button> <button id="clear" class="quiet" disabled>清空对话</button></div></div>
+      <div id="feed" role="log" aria-live="polite">
+        <div class="welcome" id="welcome">
+          <span class="cursor-mark" aria-hidden="true">›_</span>
+          <h2>你想在游戏里做什么？</h2>
+          <p>描述目标，助手会读取当前画面，并在这里反馈结果。</p>
+          <div class="examples">
+            <button data-prompt="分析当前画面，告诉我可以进行哪些操作。"><span>分析当前画面</span><b aria-hidden="true">↗</b></button>
+            <button data-prompt="打开任务界面，领取可领取的日常任务奖励。"><span>领取日常奖励</span><b aria-hidden="true">↗</b></button>
+          </div>
+        </div>
+      </div>
+      <form id="compose">
+        <button id="attachment" class="quiet" type="button" hidden></button>
+        <label for="instruction" class="sr-only">游戏指令</label>
+        <textarea id="instruction" maxlength="4000" placeholder="输入游戏指令，或继续追问…" rows="3" required></textarea>
+        <div class="compose-bar"><label class="mode"><span class="mode-icon" aria-hidden="true">⌁</span><select id="mode" aria-label="执行模式"><option value="operate">允许操作</option><option value="inspect">只读分析</option><option value="research">仅查攻略（无需设备）</option></select></label>
+          <div><button type="button" id="stop" class="stop" hidden>停止</button><button type="submit" id="send" class="primary">发送 <span aria-hidden="true">↑</span></button></div>
+        </div>
+      </form>
+    </section>
+    <aside class="monitor pane" aria-labelledby="monitorTitle">
+      <div class="pane-head"><h2 id="monitorTitle">设备画面</h2><button class="quiet" id="refreshFrame">刷新画面</button></div>
+      <div class="device-bar"><label for="device">ADB 设备</label><select id="device"><option value="">正在检测…</option></select></div>
+      <div class="display" id="display"><span class="corner tl"></span><span class="corner br"></span><img id="screen" alt="所选设备的最新游戏截图" hidden><p id="screenHint">等待设备画面</p></div>
+      <div class="telemetry"><span id="resolution">— × —</span><span id="frameTime">尚未截图</span></div>
+      <details class="recognition"><summary>识别结果 <span class="count" id="targetCount">0</span></summary><p id="recognitionStatus">获取画面后显示识别来源。</p><ul id="targets"></ul></details>
+      <div class="trace"><h2>执行记录</h2><p id="idle" class="muted">发送指令后，可在此查看每一步判断和操作。</p><ol id="steps"></ol></div>
+    </aside>
+  </main>
+  <dialog id="library" aria-labelledby="libraryTitle">
+    <div class="library-body">
+      <div class="modal-head"><h2 id="libraryTitle">攻略与 Maa</h2><button id="closeLibrary" class="close" aria-label="关闭攻略面板">×</button></div>
+      <p id="coreStatus" class="hint"></p>
+      <label for="libraryType">选择功能</label>
+      <select id="libraryType"><option value="plan">战斗作业</option><option value="roster">我的干员</option><option value="video">视频攻略</option><option value="daily">日常与代理</option></select>
+      <section id="rosterSection" hidden>
+        <label for="accountProfile">当前账号名册</label>
+        <div class="inline"><select id="accountProfile"></select><input id="profileName" maxlength="48" placeholder="新名册名称" aria-label="新名册名称"></div>
+        <p id="accountInfo" class="hint"></p>
+        <label for="boxFile">导入 Maa 的 OperBoxData.json 或 ArkPilot 名册</label><input id="boxFile" type="file" accept=".json,application/json">
+        <label for="boxData">手动录入或修正名册</label><textarea id="boxData" rows="5" placeholder='{"operators":[{"name":"克洛丝","elite":1,"level":55,"skill_level":7},{"name":"能天使","owned":false}]}'></textarea>
+        <label class="check"><input id="boxComplete" type="checkbox">我已核对完整名册，未列出的干员均未持有</label>
+        <p class="hint">扫描前打开游戏的干员列表并清除筛选。扫描会翻页，扫描后可补填技能专精。名册保存在本浏览器，切换游戏账号后请在此选择对应名册。</p>
+        <div class="library-actions"><button id="maaBoxFile" class="outline">读取 Maa 已保存的名册</button><button id="scanBox" class="outline">用 Maa 扫描当前账号</button><button id="saveBox" class="outline">保存名册</button></div>
+      </section>
+      <section id="planSection">
+        <label for="stageSearch">按关卡查找 PRTS 作业</label>
+        <div class="inline"><input id="stageSearch" placeholder="例如 1-7"><button id="searchPlans" class="outline">搜索</button></div>
+        <button id="searchVideoPlans" class="quiet" hidden>只查引用此 BV 的作业</button>
+        <a id="videoSearch" class="guide-link" target="_blank" rel="noopener noreferrer" hidden>查找这关的视频攻略 ↗</a>
+        <div id="searchResults"></div>
+        <label for="jsonFile">或选择作业 JSON 文件</label><input id="jsonFile" type="file" accept=".json,application/json">
+      </section>
+      <div id="onlineSource">
+        <label for="source">导入作业或 B 站视频简介</label>
+        <div class="inline"><input id="source" placeholder="maa://作业号、PRTS 链接、BV 号"><button id="importSource" class="outline">导入</button></div>
+      </div>
+      <section id="videoSection" hidden>
+        <button id="openOnline" class="outline" hidden>读取关联 B 站视频画面</button>
+        <label for="recording">或选择本地攻略视频</label>
+        <input id="recording" type="file" accept="video/*,.mkv,.avi">
+        <video id="guideVideo" controls preload="metadata" hidden></video>
+        <p class="hint">完整录像可用 Maa 尝试生成作业。剪辑或解说视频可选取一段画面，发送给视觉模型生成带时间的笔记。</p>
+        <div class="inline"><label>起始秒数<input id="clipStart" type="number" min="0" value="0"></label><label>结束秒数<input id="clipEnd" type="number" min="0.1" step="0.1" value="30"></label></div>
+        <div class="library-actions"><button id="readClip" class="outline">解读所选片段</button><button id="convertRecording" class="outline">完整录像转作业</button></div>
+      </section>
+      <section id="dailySection" hidden>
+        <p class="hint">直接运行 Maa，无需模型 Key。代理刷图需要已解锁该关的代理指挥。</p>
+        <div class="inline"><label>关卡<input id="farmStage" placeholder="1-7"></label><label>次数<input id="farmTimes" type="number" min="1" max="100" value="1"></label></div>
+        <div class="library-actions"><button id="runFarm" class="outline">运行代理刷图</button><button id="runAward" class="outline">领取日常奖励</button><button id="runActivityOrundum" class="outline">领取活动合成玉</button></div>
+      </section>
+      <p id="guideStatus" role="status"></p><button id="cancelGuide" class="stop" hidden>停止处理</button>
+      <section id="planPreview" hidden>
+        <h3 id="planTitle"></h3><p id="planMeta" class="hint"></p><p id="operators"></p>
+        <details><summary id="actionSummary">作业动作</summary><ol id="planActions"></ol></details>
+        <div class="library-actions"><button id="adaptPlan" class="outline">按我的干员适配部署</button><button id="undoAdapt" class="quiet" hidden>恢复原作业</button></div>
+        <p id="adaptSummary" class="hint"></p>
+        <label class="check"><input id="formation" type="checkbox">使用 Maa 自动编队</label>
+        <p class="hint">执行前请打开此作业对应的关卡准备页，核对难度和编队。</p>
+        <div class="library-actions"><button id="runPlan" class="primary">执行此作业</button><button id="checkPlan" class="outline">用 Maa 检查兼容性</button><button id="savePlan" class="quiet">导出 JSON</button></div>
+      </section>
+      <div id="referenceSection">
+        <div id="guideLinks" class="library-actions"></div>
+        <label for="guideNotes">附给对话的攻略笔记</label><textarea id="guideNotes" rows="3" maxlength="6000" placeholder="可粘贴文字攻略，或编辑视频解读结果。"></textarea>
+        <div class="library-actions"><button id="useGuide" class="outline">返回对话</button><button id="clearGuide" class="quiet">清除攻略</button></div>
+      </div>
+    </div>
+  </dialog>
+  <dialog id="settings">
+    <form id="configForm">
+      <div class="modal-head"><h2>连接设置</h2><button type="button" class="close" id="closeSettings" aria-label="关闭设置">×</button></div>
+      <fieldset><legend>模型服务</legend>
+        <label for="provider">连接方式</label><select id="provider"><option value="codex">Codex 订阅（本机 CLI）</option><option value="api">OpenAI 兼容 API</option></select>
+        <div id="apiFields">
+        <label for="url">Model URL</label><input type="url" id="url" placeholder="https://your-provider.example/v1" autocomplete="off" spellcheck="false">
+        <label for="key">API Key <small>仅在当前页面内存中使用</small></label><input type="password" id="key" placeholder="本地免鉴权模型可留空" autocomplete="off" spellcheck="false">
+        </div>
+        <label for="model">模型 ID</label><div class="inline"><input id="model" list="modelOptions" placeholder="单模型服务可自动识别" autocomplete="off" spellcheck="false"><button type="button" id="getModels" class="outline">获取模型</button></div>
+        <datalist id="modelOptions"></datalist>
+        <select id="fetchedModels" aria-label="可用模型" hidden></select>
+        <label for="inputMode">模型输入</label><select id="inputMode"><option value="vision">截图 + OCR 与模板匹配结果</option><option value="text">仅 OCR 与模板匹配结果</option></select>
+        <p class="hint" id="providerHint"></p>
+      </fieldset>
+      <details class="advanced"><summary>设备与执行选项</summary>
+        <label for="address">ADB 连接地址</label><div class="inline"><input id="address" placeholder="127.0.0.1:16384" autocomplete="off"><button type="button" class="outline" id="connect">连接</button></div>
+        <button type="button" class="quiet" id="scan">重新检测设备</button>
+        <label for="limit">每条指令的步数上限</label><input id="limit" type="number" min="1" max="100" value="24" required>
+      </details>
+      <p id="configStatus" role="status"></p>
+      <button class="primary save" type="submit">保存设置</button>
+    </form>
+  </dialog>
+</body>
+</html>
