@@ -189,6 +189,7 @@ async function submit(event, native = null, label = '', existing = null) {
   event?.preventDefault();
   const instruction = label || $('instruction').value.trim();
   if (!instruction || controller) return;
+  if (!native && instruction === '/活动合成玉') native = {task:'ActivityOrundum'};
   if (!existing && !native && !config.url) { openSettings('填写模型服务地址后即可发送这条指令。'); return; }
   const serial = existing?.serial || $('device').value;
   const researchOnly = $('mode').value === 'research';
@@ -200,7 +201,7 @@ async function submit(event, native = null, label = '', existing = null) {
   const previous = history.filter(m => m.serial === serial).slice(-12).map(({ role, text }) => ({ role, text }));
   history.push({ role: 'user', text: instruction, serial }); message('user', instruction);
   const reply = message('assistant', '正在连接…');
-  $('steps').replaceChildren(); $('idle').hidden = true; if (!native) $('instruction').value = '';
+  $('steps').replaceChildren(); $('idle').hidden = true; if (!label || !native) $('instruction').value = '';
   busy(true);
   let end = false, step, applied = [];
   try {

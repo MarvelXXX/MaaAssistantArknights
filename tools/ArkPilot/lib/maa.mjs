@@ -33,7 +33,7 @@ export function nativeAction(a, hasPlan) {
     if (!Number.isInteger(a.skill) || a.skill < 1 || a.skill > 3) throw new Error('悖论技能序号应为 1 至 3。');
     return { type:'maa', task:a.task, skill:a.skill };
   }
-  if (a?.task === 'Award') return { type:'maa', task:'Award' };
+  if (a?.task === 'Award' || a?.task === 'ActivityOrundum') return { type:'maa', task:a.task };
   if (['Copilot','ParadoxCopilot'].includes(a?.task) && hasPlan) return { type:'maa', task:a.task };
   if (a?.task === 'Fight' && typeof a.stage === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(a.stage) &&
       a.stage.length <= 40 && Number.isInteger(a.times) && a.times >= 1 && a.times <= 100) {
@@ -257,7 +257,11 @@ export async function executeMaa(action, { home, device, serial, guide, formatio
     let params, stageTask;
     let type = a.task;
     if (a.task === 'Fight') params = {stage:a.stage, times:a.times, medicine:0, stone:0, expiring_medicine:0, medicine_expire_days:0};
-    if (a.task === 'Award') params = {award:true, mail:false, recruit:false, orundum:false, mining:false, specialaccess:false};
+    if (a.task === 'Award' || a.task === 'ActivityOrundum') {
+      type = 'Award';
+      const activity = a.task === 'ActivityOrundum';
+      params = {award:!activity, mail:false, recruit:false, orundum:activity, mining:activity, specialaccess:false, signinevent:false};
+    }
     if (a.task === 'Copilot' || a.task === 'ParadoxCopilot') {
       const filename = path.join(work, 'plan.json');
       const original = checkPlan(guide);

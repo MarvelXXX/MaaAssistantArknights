@@ -254,6 +254,7 @@ export function setupGuides({post,events,getConfig,runDirect}) {
   }
   $('runPlan').onclick = () => direct({task:'Copilot'},'执行已选作业 ' + plan.stage_name);
   $('runAward').onclick = () => direct({task:'Award'},'使用 Maa 领取日常奖励');
+  $('runActivityOrundum').onclick = () => direct({task:'ActivityOrundum'},'/活动合成玉');
   $('runFarm').onclick = () => {
     const stage = $('farmStage').value.trim(), times = Number($('farmTimes').value);
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(stage) || !Number.isInteger(times) || times < 1 || times > 100) return status('请填写关卡编号和 1–100 次代理次数。',true);

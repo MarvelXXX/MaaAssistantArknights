@@ -248,6 +248,17 @@ test('原生任务支持免模型执行，遵守只读模式及服务端独占',
   assert.equal(events.at(-1).outcome,'finish'); assert.equal(events.some(e=>e.type==='core'),true);
   assert.deepEqual(calls[0].a,{type:'maa',task:'Copilot'});
   assert.deepEqual(calls[0].options.guide,plan);
+
+  const activity = {instruction:'/活动合成玉',guide:null,native:null};
+  assert.equal((await send({...activity,readOnly:true})).status,400);
+  assert.equal((await send({...activity,researchOnly:true})).status,400);
+  assert.equal(calls.length,1);
+  const free = await send(activity);
+  const activityEvents = (await free.text()).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls[1].a,{type:'maa',task:'ActivityOrundum'});
+  assert.equal(activityEvents.at(-1).outcome,'finish');
+  assert.match(activityEvents.at(-1).note,/检查幸运墙和限时开采/);
+  assert.deepEqual(nativeAction({task:'ActivityOrundum',recruit:true,mail:true},false),calls[1].a);
 });
 
 test('同一指令依次打不同悖论，同一关重复时停止', async () => {

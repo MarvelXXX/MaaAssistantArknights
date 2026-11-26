@@ -212,10 +212,11 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
       const attachedGuide = data.guide == null ? null : checkPlan(data.guide);
       const roster = data.roster ? await normalizeRoster(data.roster) : null;
       const researchOnly = data.researchOnly === true;
-      const direct = data.native ? nativeAction(data.native,!!attachedGuide) : null;
+      const instruction = data.instruction?.trim();
+      const nativeRequest = data.native ?? (instruction === '/活动合成玉' ? {task:'ActivityOrundum'} : null);
+      const direct = nativeRequest ? nativeAction(nativeRequest,!!attachedGuide) : null;
       if (direct && (data.readOnly === true || researchOnly)) throw new Error('当前为只读分析，请切换到允许操作再运行 Maa。');
       const config = direct ? null : modelConfig(data);
-      const instruction = data.instruction?.trim();
       if (!instruction || instruction.length > 4000) throw new Error('指令长度应在 1 至 4000 字之间。');
       const detached = instruction === '/后台首通清单';
       if (detached && data.backgroundQueue!==true) throw new Error('请刷新指令台以使用后台运行和停止功能。');
@@ -306,7 +307,9 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             emit({type:'decision',action:direct,goal:instruction,note:'正在运行 Maa 任务'});
             await runNative(direct);
             emit({type:'applied',action:direct});
-            emit({type:'end',outcome:'finish',goal:instruction,note:'Maa 已报告 ' + direct.task + ' 任务链执行结束。'});
+            const note = direct.task === 'ActivityOrundum' ? 'Maa 已检查幸运墙和限时开采。实际领取数量请核对奖励画面与首页余额。' :
+              'Maa 已报告 ' + direct.task + ' 任务链执行结束。';
+            emit({type:'end',outcome:'finish',goal:instruction,note});
             return;
           }
           emit({ type: 'model', model: config.model });
