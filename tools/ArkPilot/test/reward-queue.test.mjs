@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dismissStoneRecovery, exchangeItemReceipt, isRewardHome, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, rewardWalletContext, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForRewardManifest, waitForWalletModel} from '../lib/reward-queue.mjs';
+import {confirmWalletBalances, dismissStoneRecovery, exchangeItemReceipt, isRewardHome, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, rewardWalletContext, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForRewardManifest, waitForWalletModel} from '../lib/reward-queue.mjs';
 
 test('核账时区分快捷导航和显示理智的真实首页',()=>{
   const ocr=(...labels)=>labels.map(label=>({source:'OCR',label}));
@@ -516,4 +516,19 @@ test('UID 有分歧时只读新帧，须连续两次匹配才能继续', async (
   assert.equal((await verifyWalletAccount(read(['123458','123456','123456']),'123456')).uid,'123456');
   await assert.rejects(verifyWalletAccount(read(['123458','123458']),'123456'),/UID/);
   await assert.rejects(verifyWalletAccount(read(['123458','123456','123458']),'123456'),/UID/);
+});
+
+test('首页余额漏一位需新截图印证，理智恢复采用最新读数', async () => {
+  const base = {uid:'123456', prime:190, orundum:37178, sanity:9};
+  const capture = (...frames) => async () => {
+    assert.ok(frames.length,'unexpected extra capture');
+    return frames.shift();
+  };
+  const truncated = {...base,orundum:3718};
+  const current = {...base,sanity:10};
+  assert.deepEqual(await confirmWalletBalances(capture(truncated,base,current)),current);
+  assert.deepEqual(await confirmWalletBalances(capture(current),base),current);
+  const reward = {...current,prime:191};
+  assert.deepEqual(await confirmWalletBalances(capture({...reward,orundum:3718},reward,reward),base),reward);
+  await assert.rejects(confirmWalletBalances(capture(truncated,base,truncated,base)),{code:'WALLET_UNREADABLE'});
 });
