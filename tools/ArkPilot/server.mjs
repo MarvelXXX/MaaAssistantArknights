@@ -304,10 +304,13 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             timer = setTimeout(updateFrame, 1500);
             try {
               if (guideId) onGuideStart?.(guideId);
-              return await native(a, {home,device,serial:data.serial,guide,formation,borrowSupport:!!supportSlot,afterStep,signal:watching,progress:text=>{
+              const selected = new Set();
+              await native(a, {home,device,serial:data.serial,guide,formation,borrowSupport:!!supportSlot,afterStep,signal:watching,progress:(text,evidence)=>{
+                if (evidence?.selectedOperator) selected.add(evidence.selectedOperator);
                 phase = text;
                 emit({type:'core',text});
               }});
+              if (selected.size) return 'Maa 自动编队已选入' + [...selected].join('、') + '。请结合画面核对实际部署和结算。';
             } finally {
               observer.abort();
               clearTimeout(timer);
@@ -315,10 +318,10 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
           };
           if (direct) {
             emit({type:'decision',action:direct,goal:instruction,note:'正在运行 Maa 任务'});
-            await runNative(direct);
+            const nativeReport = await runNative(direct);
             emit({type:'applied',action:direct});
             const note = direct.task === 'ActivityOrundum' ? 'Maa 已检查幸运墙和限时开采。实际领取数量请核对奖励画面与首页余额。' :
-              'Maa 已报告 ' + direct.task + ' 任务链执行结束。';
+              nativeReport || 'Maa 已报告 ' + direct.task + ' 任务链执行结束。';
             emit({type:'end',outcome:'finish',goal:instruction,note});
             return;
           }

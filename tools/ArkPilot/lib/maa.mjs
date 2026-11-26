@@ -176,6 +176,11 @@ export async function runCore({ home, work, client = '', serial = '', type, para
       try { info = JSON.parse(content); } catch { return; }
       if (info.what === 'ScreencapCost' || info.what === 'EmulatorFPS') return;
       if (type === 'OperBox' && info.what === 'OperBoxInfo' && info.details?.done === true) onBox?.(info.details.own_opers);
+      if (copilot && info.what === 'BattleFormationSelected' && typeof info.details?.selected === 'string') {
+        const selectedOperator = info.details.selected.trim().slice(0,60);
+        if (selectedOperator) progress('Maa 自动编队选入 ' + selectedOperator, {selectedOperator});
+        return;
+      }
       let name = String(info.why || info.what || info.details?.task || info.subtask || info.taskchain || '').slice(0,120);
       if (type === 'VideoRecognition' && Object.hasOwn(videoPhases,info.what)) {
         videoPhase = videoPhases[info.what]; name = videoPhase;
