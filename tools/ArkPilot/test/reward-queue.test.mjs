@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dismissStoneRecovery, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, rewardWalletContext, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForRewardManifest, waitForWalletModel} from '../lib/reward-queue.mjs';
+import {dismissStoneRecovery, exchangeItemReceipt, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, rewardWalletContext, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForRewardManifest, waitForWalletModel} from '../lib/reward-queue.mjs';
 
 test('等待自然理智期间更新清单可提前唤醒，不会一直等到理智回满',async()=>{
   const pauses=[];
@@ -282,6 +282,10 @@ test('复核免费领取需同一张获得物资画面的币种、对应数量�
   const money = ocr('龙门币',[403,388,71,23]);
   const foreign = ocr('1,000',[426,329,58,21]);
   const anchors = [header,currency,quantity,money,foreign];
+  const exchange={amount:100,intelExchange:{lots:1,tickets:25,stock:12}};
+  assert.equal(exchangeItemReceipt(exchange,before,after,anchors),'兑换已核，情报凭证 25→5，商品库存 12→11。首页合成玉 21578→21678，至纯源石 148→148。');
+  assert.equal(exchangeItemReceipt(exchange,before,after,[header,money,quantity]),undefined);
+  assert.equal(exchangeItemReceipt(exchange,before,{...after,prime:147},anchors),undefined);
   assert.equal((await rewardReceipt(target,before,after,anchors)).status,'领取已核');
   assert.equal(await rewardReceipt(target,before,{...after,prime:149},anchors),undefined);
   assert.equal(await rewardReceipt(target,before,{...before,orundum:22578},anchors),undefined);

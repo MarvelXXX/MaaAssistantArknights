@@ -152,6 +152,20 @@ export function reconcileReward(target, report, before, after) {
   return '未完成';
 }
 
+function exchangeReport(order,before,after) {
+  const {tickets,stock,lots}=order;
+  return '兑换已核，情报凭证 '+tickets+'→'+(tickets-lots*20)+'，商品库存 '+stock+'→'+(stock-lots)+
+    '。首页合成玉 '+before.orundum+'→'+after.orundum+'，至纯源石 '+before.prime+'→'+after.prime+'。';
+}
+
+export function exchangeItemReceipt(target,before,after,anchors) {
+  if (!target.intelExchange || !before || !after || after.prime!==before.prime || after.orundum-before.orundum!==target.amount) return;
+  const words=anchors.filter(a=>a.source==='OCR').map(a=>({...a,label:a.label.replace(/\s/g,'')}));
+  if (words.some(a=>a.label==='获得物资') && receivedItem(words,'合成玉',target.amount)) {
+    return exchangeReport(target.intelExchange,before,after);
+  }
+}
+
 export async function verifiedFirstDrop(target, before, after, anchors) {
   if (!target.stage || target.claimAvailable || target.currency !== 'prime' || target.amount !== 1 ||
       !before || !after || !Number.isInteger(before.prime) || !Number.isInteger(before.orundum) ||
@@ -509,19 +523,36 @@ export async function runRewardQueue({filename, serial, device, config, runComma
   const visits = [];
   for (const target of manifest.targets) {
     const row = ledger.items[target.id];
-    if (row?.status !== '余额待复核' || (!target.claimAvailable && !target.stage)) continue;
+    const linkedExchange=target.intelExchange && row?.status==='兑换已核' && row.exchangeStock &&
+      reconcileReward(target,row.note,row.before,row.after)==='兑换已核';
+    if (linkedExchange && row.evidence) {
+      const note=exchangeReport(target.intelExchange,row.before,row.after);
+      if (row.note!==note) {row.note=note; await save();}
+      continue;
+    }
+    if (!linkedExchange && (row?.status !== '余额待复核' || (!target.claimAvailable && !target.stage))) continue;
     const kind = row.evidence==='stage' ? 'stage' : 'result';
     const proof = path.join(dir,target.id+'-'+kind+'.jpg');
     let verified;
     try {
       const {mtimeMs} = await stat(proof);
       const end = Date.parse(row.at);
-      const start = row.started ? Date.parse(row.started) : Math.max(end-35*minute,
+      // An inventory recheck may finish in a later session than the original item popup.
+      const start = linkedExchange ? Date.parse(row.started)-35*minute : row.started ? Date.parse(row.started) : Math.max(end-35*minute,
         ...Object.values(ledger.items).map(r=>Date.parse(r.at)).filter(at=>at<end));
       if (!(mtimeMs>=start && mtimeMs<=end+1000)) continue;
       const image = jpeg.decode(await readFile(proof),{useTArray:true});
       const client = await device.checkGame(signal);
       const {anchors} = await recognize({png:PNG.sync.write(image),width:image.width,height:image.height,client},signal);
+      if (linkedExchange) {
+        const note=exchangeItemReceipt(target,row.before,row.after,anchors);
+        if (note) {
+          row.evidence='result';
+          row.note=note;
+          await save();
+        }
+        continue;
+      }
       verified = await rewardReceipt(target,row.before,row.after,anchors);
       if (!verified) {
         if (needsParadoxVisit(target,row,anchors)) visits.push(target);
@@ -675,9 +706,8 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     if (!t.claimAvailable && !t.intelExchange && previous.status === '进行中' && report.startsWith('原已完成') &&
         wallet[t.currency]-before[t.currency] === t.amount) report = '首通已核（中断后复核） '+report;
     if (t.intelExchange) {
-      const {tickets,stock,lots}=t.intelExchange;
       if (stockProof && wallet.prime===before.prime && wallet.orundum-before.orundum===t.amount) {
-        report='兑换已核，情报凭证 '+tickets+'→'+(tickets-lots*20)+'，商品库存 '+stock+'→'+(stock-lots)+'。'+report;
+        report=exchangeReport(t.intelExchange,before,wallet);
       } else if (!stockProof && report.startsWith('兑换已核')) report='尚未识别兑换后库存。'+report;
     }
     let status = reconcileReward(t,report,before,wallet);
@@ -698,7 +728,8 @@ export async function runRewardQueue({filename, serial, device, config, runComma
     if (evidence.best) {
       await imageFile(t.id,evidence.best.kind,evidence.best.preview);
       row.evidence = evidence.best.kind;
-    }
+    } else if (reviewingExchange && previous.evidence==='result' && previous.after?.orundum===wallet.orundum &&
+        previous.after?.prime===wallet.prime) row.evidence='result';
     if (t.revision) row.revision = t.revision;
     if (usedGuide && status==='未完成') failed.add(usedGuide);
     if (failed.size) row.failedGuideIds = [...failed];
