@@ -81,7 +81,7 @@ export function selectRewardTarget(targets, ledger, now, sanity) {
   if (interrupted) return interrupted;
   const eligible = targets.filter(t => {
     const row = ledger.items[t.id];
-    const corrected = (row?.status === '未完成' || row?.status === '入口关闭') &&
+    const corrected = (row?.status === '未完成' || row?.status === '入口关闭' || t.intelExchange && row?.status==='余额待复核') &&
       (t.revision || 0) > (row.revision || 0);
     const alternative = row?.status === '未完成' && nextRewardGuide(t,row);
     const freeRetry = alternative && t.ap === 0 && failedGuides(row).size > 0;
@@ -435,6 +435,13 @@ export async function runRewardStage(runCommand,options) {
   }
 }
 
+export async function waitForRewardManifest(filename, modified, until, signal, pause=delay) {
+  while (Date.now()<until) {
+    await pause(Math.min(10000,until-Date.now()),undefined,{signal});
+    if ((await stat(filename)).mtimeMs!==modified) return;
+  }
+}
+
 export async function runRewardQueue({filename, serial, device, config, runCommand, emit, signal, background = false}) {
   async function loadManifest() {
     const data = JSON.parse((await readFile(filename,'utf8')).replace(/^\uFEFF/,''));
@@ -578,14 +585,16 @@ export async function runRewardQueue({filename, serial, device, config, runComma
       const next = Math.min(...future);
       await save();
       notify('等待游戏资源或关卡开放，下次检查 '+new Date(next).toLocaleString('zh-CN')+'。');
-      await delay(Math.min(next-Date.now(),60*minute),undefined,{signal});
+      await waitForRewardManifest(filename,modified,Math.min(next,Date.now()+60*minute),signal);
       wallet = await homeWallet();
       continue;
     }
     const previous = ledger.items[t.id] || {};
-    const before = previous.status === '进行中' && previous.before ? previous.before : numbers(wallet);
+    const reviewingExchange = !!t.intelExchange && (previous.status==='余额待复核' || previous.exchangeAuditOnly===true);
+    const before = (previous.status === '进行中' || reviewingExchange) && previous.before ? previous.before : numbers(wallet);
     const attempts = (previous.attempts || 0) + 1;
     ledger.items[t.id] = {...previous, status:'进行中', attempts, before, started:new Date().toISOString()};
+    if (reviewingExchange) ledger.items[t.id].exchangeAuditOnly=true;
     // The existing timestamp, balance and screenshots belong to the last settled attempt.
     if (previous.at && previous.status !== '进行中') ledger.items[t.id].lastStatus = previous.status;
     await save();
@@ -638,14 +647,14 @@ export async function runRewardQueue({filename, serial, device, config, runComma
           ' 和应付 '+(lots*20)+'，均一致方可确认一次。遇到其他币种、价格或无法辨认，关闭页面。'+
           '取得后观察获得物资，再打开同一商品详情取一帧核实剩余凭证与库存，再关闭回首页。finish 用实际值按“兑换已核，情报凭证 A→B，商品库存 C→D”报告。'+
           '若是中断恢复且凭证或库存已变，只对账，不重新提交。';
-        if (before.prime!==wallet.prime || before.orundum!==wallet.orundum) {
-          instructions = '当前余额已经变化，只查看情报凭证余额和商品库存，禁止购买。核实此前兑换时按“兑换已核，情报凭证 A→B，商品库存 C→D”报告，回首页。';
+        if (reviewingExchange || before.prime!==wallet.prime || before.orundum!==wallet.orundum) {
+          instructions = '本轮只复核上次兑换，禁止购买。先打开同一商品详情取一帧，只查看情报凭证余额和商品库存。核实此前兑换时按“兑换已核，情报凭证 A→B，商品库存 C→D”报告，回首页。';
         }
       }
       report = await play('本轮只处理 '+t.label+'。'+walletContext+caution+t.route+'。'+avoid+loaded+annihilation+instructions+spending,{
           limit:75, ap:t.ap, expectedStage:t.stage, guide, guideId:guide ? candidate : undefined, onGuideStart:id=>{usedGuide=id;},
           resumeAfterStep:t.resumeAfterStep, allowNative:!t.intelExchange && !credited && t.useNative!==false, fixedTeam:t.fixedTeam===true,
-          intelExchange:t.intelExchange && {...t.intelExchange,auditOnly:before.prime!==wallet.prime || before.orundum!==wallet.orundum},
+          intelExchange:t.intelExchange && {...t.intelExchange,auditOnly:reviewingExchange || before.prime!==wallet.prime || before.orundum!==wallet.orundum},
           onStageEvent:observeStage,
         });
     } catch (error) {

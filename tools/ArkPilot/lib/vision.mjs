@@ -113,14 +113,6 @@ export async function recognize(frame, signal) {
   const image = pixels(frame.png);
   const [templates, ocr] = await Promise.all([matchTemplates(image, frame.client), readText(frame, signal)]);
   signal?.throwIfAborted();
-  const shopLabels = ocr.lines.map(a=>a.label.replace(/\s/g,''));
-  if (Math.abs(image.width/image.height-16/9)<0.015 && shopLabels.includes('合成玉') &&
-      (shopLabels.includes('购买物品') || shopLabels.some(s=>s.includes('关于情报凭证区')))) {
-    const box=[1338,24,97,38].map((n,i)=>Math.round(n*(i%2 ? image.height/810 : image.width/1440)));
-    const lines=await readCrop(image,box,'com.YoStarEN.Arknights',signal);
-    const value=lines.map(line=>line.label).join('').replace(/\s/g,'');
-    if (/^\d{1,8}$/.test(value)) ocr.lines.push({source:'OCR',label:value,box});
-  }
   if (templates.anchors.some(a => a.label === '悖论模拟开始按钮') &&
       ocr.lines.some(line => line.label === '悖论模拟') &&
       !ocr.lines.some(line => line.label.replace(/[\s\p{P}\p{S}]/gu, '') === '已完成模拟作战')) {
@@ -139,9 +131,33 @@ export async function recognize(frame, signal) {
   } finally { rgba.delete(); small.delete(); }
 }
 
+export function intelBalanceCrop(frame) {
+  const labels=frame.anchors.map(a=>a.label.replace(/\s/g,''));
+  if (!frame.image || Math.abs(frame.width/frame.height-16/9)>0.015 || !labels.includes('合成玉') ||
+      !(labels.includes('购买物品') || labels.some(s=>s.includes('关于情报凭证区')))) return;
+  const box=[1338,26,98,34].map((n,i)=>Math.round(n*(i%2 ? frame.height/810 : frame.width/1440)));
+  const [left,top,w,h]=box, scale=4, width=w*scale, height=h*scale;
+  const data=Buffer.alloc(width*height*4);
+  let first=w, last=-1;
+  for (let y=0;y<h;y++) {
+    for (let x=0;x<w;x++) {
+      const src=4*((top+y)*frame.width+left+x);
+      const rgba=frame.image.data.readUInt32LE(src);
+      if (Math.min(...frame.image.data.subarray(src,src+3))>160) { first=Math.min(first,x); last=Math.max(last,x); }
+      for (let dx=0;dx<scale;dx++) data.writeUInt32LE(rgba,4*(y*scale*width+x*scale+dx));
+    }
+    const line=4*y*scale*width;
+    for (let dy=1;dy<scale;dy++) data.copy(data,line+4*width*dy,line,line+4*width);
+  }
+  // The shop header uses fixed-width digits. A truncated OCR string must never match a smaller balance.
+  const digits=Math.round((last-first+1)/(15.6*frame.width/1440));
+  if (digits<1 || digits>6) return;
+  return {box,digits,width,height,preview:'data:image/jpeg;base64,'+jpeg.encode({width,height,data},94).data.toString('base64')};
+}
+
 export function intelShopStock(frame, tickets, stock) {
   const labels=frame.anchors.map(a=>a.label.replace(/\s/g,''));
-  if (!labels.includes('合成玉') || !frame.anchors.some(a=>a.label.trim()===String(tickets) && a.box &&
+  if (!labels.includes('合成玉') || !frame.anchors.some(a=>a.source==='凭证读数' && a.label===String(tickets) && a.box &&
       a.box[0]/frame.width>0.92 && a.box[1]/frame.height<0.085)) return false;
   if (labels.includes('购买物品')) return labels.includes('剩余'+stock) && labels.includes('售价20');
   if (!labels.some(s=>s.includes('关于情报凭证区'))) return false;
@@ -154,17 +170,11 @@ export function intelShopStock(frame, tickets, stock) {
 async function readParadoxCompletion(image, client, signal) {
   const sx = image.width / 1280, sy = image.height / 720;
   const box = [Math.round(48 * sx), Math.round(661 * sy), Math.round(140 * sx), Math.round(27 * sy)];
-  const lines=await readCrop(image,box,client,signal);
-  const label = '已完成模拟作战';
-  if (lines.some(line => line.label.replace(/\s/g, '') === label)) return { source: 'OCR', label, box };
-}
-
-async function readCrop(image, box, client, signal) {
   const gray = grayMat(image), crop = gray.roi(new cv.Rect(...box));
   const zoom = new cv.Mat(), padded = new cv.Mat(), rgba = new cv.Mat();
   let png;
   try {
-    cv.resize(crop, zoom, new cv.Size(Math.round(54*box[2]/box[3]),54), 0, 0, cv.INTER_CUBIC);
+    cv.resize(crop, zoom, new cv.Size(280, 54), 0, 0, cv.INTER_CUBIC);
     cv.normalize(zoom, zoom, 0, 255, cv.NORM_MINMAX);
     cv.bitwise_not(zoom, zoom);
     cv.copyMakeBorder(zoom, padded, 10, 10, 12, 12, cv.BORDER_CONSTANT, new cv.Scalar(255));
@@ -175,7 +185,8 @@ async function readCrop(image, box, client, signal) {
   }
   const { lines } = await readText({ png, client }, signal);
   signal?.throwIfAborted();
-  return lines;
+  const label = '已完成模拟作战';
+  if (lines.some(line => line.label.replace(/\s/g, '') === label)) return { source: 'OCR', label, box };
 }
 
 export function hasFacingPrompt(before, after, target) {

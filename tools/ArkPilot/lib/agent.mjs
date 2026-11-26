@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { hasFacingPrompt, intelShopStock, recognize, sameReadyOperator, stillMatches } from './vision.mjs';
+import { hasFacingPrompt, intelBalanceCrop, intelShopStock, recognize, sameReadyOperator, stillMatches } from './vision.mjs';
 import { deploymentTarget } from './guides.mjs';
 import { decide } from './model.mjs';
 import { nativeAction } from './maa.mjs';
@@ -168,6 +168,20 @@ export async function runAgent({ config, device, instruction, history, readOnly,
   const attemptedTasks = new Set();
   const protectsCurrency = noPremiumSpend.test(instruction);
   let submittedExchange = false;
+  async function observeGame(raw) {
+    const frame=await observe(raw,signal);
+    const crop=intelExchange && intelBalanceCrop(frame);
+    if (!crop) return frame;
+    const read=await plan({...config,toolsUnsupported:true},{
+      instruction:'这是游戏商店右上角当前凭证余额的独立放大图。只读这串白色数字，斜杠穿过的椭圆是数字0。看清全部数字时，finish 的 note 只写完整整数，看不清则写读数失败。',
+      readOnly:true,turn:1,recentSteps:[],conversation:[],remainingActions:0,
+    },{width:crop.width,height:crop.height,preview:crop.preview,anchors:[]},signal);
+    const label=read.note?.trim();
+    if (read.action?.type==='finish' && /^\d+$/.test(label) && label.length===crop.digits) {
+      return {...frame,anchors:[...frame.anchors,{source:'凭证读数',label,box:crop.box,id:frame.anchors.length+1}]};
+    }
+    return frame;
+  }
   let adaptation, rejectedInput, modelRetries = 0;
   let staleCount = 0, actionCount = 0, previousInput, identicalInputs = 0;
   const recent = () => steps.length <= 18 ? steps : [...steps.slice(0, 3), ...steps.slice(-15)];
@@ -176,7 +190,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     let frame = {anchors:[],recognition:'仅查攻略，无游戏画面'};
     if (device) {
       emit({ type: 'status', text: '正在识别游戏画面', turn });
-      frame = await observe(await device.capture(signal), signal);
+      frame = await observeGame(await device.capture(signal));
     }
     signal.throwIfAborted();
     if (device) emit({ type: 'frame', preview: frame.preview, width: frame.width, height: frame.height,
@@ -293,7 +307,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
         }
       } else {
         if (buying) {
-          const fresh = await observe(current,signal);
+          const fresh = await observeGame(current);
           if (!intelCheckout(fresh,action,intelExchange,submittedExchange) || premiumConfirmation(fresh)) {
             throw new Error('购买前的实时凭证或价格已变化，已停止输入。');
           }

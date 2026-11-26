@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dismissStoneRecovery, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, rewardWalletContext, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForWalletModel} from '../lib/reward-queue.mjs';
+import {dismissStoneRecovery, needsParadoxVisit, nextRewardGuide, readWalletWithRetry, reconcileReward, refreshSanityWait, renderProgress, rewardEvidence, rewardReceipt, rewardWalletContext, runRewardStage, selectRewardTarget, verifiedFirstDrop, verifyWalletAccount, visitParadoxDetail, waitForRewardManifest, waitForWalletModel} from '../lib/reward-queue.mjs';
+
+test('等待自然理智期间更新清单可提前唤醒，不会一直等到理智回满',async()=>{
+  const pauses=[];
+  await waitForRewardManifest(new URL(import.meta.url),0,Date.now()+3600000,new AbortController().signal,
+    async ms=>{pauses.push(ms);});
+  assert.deepEqual(pauses,[10000]);
+});
 
 test('凭证兑换同时核对两项余额、扣券量与库存，不重复记作免费领取或首通',()=>{
   for (const lots of [1,95]) {
@@ -15,6 +22,7 @@ test('凭证兑换同时核对两项余额、扣券量与库存，不重复记�
     assert.equal(reconcileReward(t,'领取已核',before,after),'余额待复核');
     const ledger={items:{exchange:{status:'兑换已核',at:'2026-11-26T00:00:00Z',after,exchangeStock:true}}};
     assert.equal(selectRewardTarget([t],ledger,0),undefined);
+    assert.equal(selectRewardTarget([{...t,revision:2}],{items:{exchange:{status:'余额待复核',review:true,revision:1}}},0).id,t.id);
     assert.match(renderProgress({targets:[t]},ledger),/首通 0 项、领取免费奖励 0 项、核实凭证兑换 1 项/);
   }
 });
