@@ -72,6 +72,28 @@ function gameStartTap(frame, action) {
   return yellow > samples * 0.12;
 }
 
+function navigationTapTarget(frame, action) {
+  if (gameStartTap(frame, action)) return 'START';
+  if (action.type !== 'tap' || action.y < frame.height * 0.12 || action.y > frame.height * 0.83) return;
+  const labels = frame.anchors.filter(a => a.source === 'OCR' && a.box && a.label);
+  const footer = labels.filter(a => a.box[0] > frame.width * 0.7 && a.box[1] > frame.height * 0.83);
+  if (!footer.some(a => a.label.replace(/\s/g, '') === '当前进度') ||
+      !footer.some(a => a.label.trim() === 'EPISODE') ||
+      labels.some(a => /是否|确认|取消|开始行动|恢复理智|代理指挥|购买/.test(a.label.replace(/\s/g, '')))) return;
+  // Chapter maps drift while the model is thinking. Only the still-visible stage number is actionable.
+  for (const { label, box: [x, y, w, h] } of labels) {
+    if (action.x < x + 2 || action.x >= x + w - 2 || action.y < y + 2 || action.y >= y + h - 2) continue;
+    const code = label.replace(/\s/g, '').replace(/[·．.一－–—]/g, '-');
+    if (/^H?\d{1,2}-\d{1,2}$/.test(code)) return code;
+  }
+}
+
+async function sameNavigationTap(before, current, action, observe, signal) {
+  if (before.client !== current.client || before.width !== current.width || before.height !== current.height) return false;
+  const target = navigationTapTarget(before, action);
+  return Boolean(target) && target === navigationTapTarget(await observe(current, signal), action);
+}
+
 export function baseInspectionInput(frame, action) {
   if (action.type==='back' || action.type==='wait' || endTypes.has(action.type) || researchTools.has(action.type)) return true;
   const labels=frame.anchors.map(a=>(a.label || '').replace(/\s/g,''));
@@ -414,8 +436,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     } else {
       const current = await device.capture(signal);
       if (!matches(frame, current, action) && !await sameReadyOperator(frame,current,action) &&
-          !(frame.client === current.client && frame.width === current.width && frame.height === current.height &&
-            gameStartTap(frame, action) && gameStartTap(await observe(current, signal), action))) {
+          !await sameNavigationTap(frame, current, action, observe, signal)) {
         staleCount++;
         emit({ type: 'stale', text: '画面已变化，跳过本次输入并重新判断。', turn });
         steps.push({ turn, action, note, result: '画面已变化，本次输入未发送。请根据新截图重新选择稳定的目标。' });
