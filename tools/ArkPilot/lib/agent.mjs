@@ -233,11 +233,6 @@ export async function runAgent({ config, device, instruction, history, readOnly,
   const protectsCurrency = practiceOnly || noPremiumSpend.test(instruction);
   let submittedExchange = false;
   let afterNativeBattle = false, settledResult = false;
-  async function waitForRating(turn) {
-    emit({type:'status',text:'等待结算动画结束，再核对最终评价',turn});
-    await pause(4500, signal);
-    signal.throwIfAborted();
-  }
   let blockedBaseInputs=0;
   async function observeGame(raw) {
     const frame=await observe(raw,signal);
@@ -261,11 +256,18 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     let frame = {anchors:[],recognition:'仅查攻略，无游戏画面'};
     if (device) {
       emit({ type: 'status', text: '正在识别游戏画面', turn });
-      if (afterNativeBattle) await waitForRating(turn);
       frame = await observeGame(await device.capture(signal));
+      if (afterNativeBattle && frame.preview && !frame.anchors?.length) {
+        emit({type:'status',text:'Maa 已返回，正在复核过渡画面',turn});
+        await pause(1000, signal);
+        signal.throwIfAborted();
+        frame = await observeGame(await device.capture(signal));
+      }
       // The result heading and outlines appear before all earned stars light up.
       if (!settledResult && battleResult(frame)) {
-        await waitForRating(turn);
+        emit({type:'status',text:'等待结算动画结束，再核对最终评价',turn});
+        await pause(4500, signal);
+        signal.throwIfAborted();
         frame = await observeGame(await device.capture(signal));
       }
       settledResult = battleResult(frame);
