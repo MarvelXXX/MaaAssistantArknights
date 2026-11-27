@@ -63,6 +63,17 @@ export function mergeRosterScan(previous, scan) {
   return {...scan,operators};
 }
 
+export function mergeMaaRosterFile(profile, roster, syncTime) {
+  const savedAt = profile?.observedAt ?? Date.parse(profile?.updated);
+  const fileAt = Date.parse(syncTime);
+  // Older or undated Maa files supplement the selected account's existing observations.
+  let merged = roster;
+  if (profile?.roster) {
+    merged = fileAt > savedAt ? mergeRosterScan(profile.roster, roster) : mergeRosterScan(roster, profile.roster);
+  }
+  return {...merged,observedAt:Math.max(savedAt || 0,fileAt || 0) || Date.now()};
+}
+
 export function setupGuides({post,events,getConfig,runDirect}) {
   let plan = null, source = '', mediaUrl = '', pending = null, relatedVideo = null, onlineVideo = null, recentSearch = [];
   let beforeAdapt = null;
@@ -83,7 +94,8 @@ export function setupGuides({post,events,getConfig,runDirect}) {
   const currentRoster = () => profiles.get($('accountProfile').value)?.roster || null;
   function saveRoster(data,name) {
     const operators = data.operators.map(({tokens,position,role,rarity,branch,rangeIds,...record})=>record);
-    profiles.set(name,{roster:{complete:data.complete,operators},updated:new Date().toLocaleString()});
+    const now = new Date();
+    profiles.set(name,{roster:{complete:data.complete,operators},updated:now.toLocaleString(),observedAt:data.observedAt ?? now.getTime()});
     localStorage.setItem('arkpilot.rosters',JSON.stringify([...profiles]));
     profileMenu(name);
   }
@@ -166,7 +178,11 @@ export function setupGuides({post,events,getConfig,runDirect}) {
   const profileName = () => $('profileName').value.trim() || $('accountProfile').value || '我的账号';
   $('maaBoxFile').onclick = () => job('正在读取 Maa 的本机名册…',async signal=>{
     const roster = await request('roster/maa-file',{},signal);
-    saveRoster(roster,profileName()); status('已导入 '+roster.operators.length+' 条记录'+(roster.syncTime ? '，Maa 同步时间 '+roster.syncTime : '')+'。');
+    const name = profileName();
+    const merged = mergeMaaRosterFile(profiles.get(name),roster,roster.syncTime);
+    saveRoster(merged,name);
+    status('Maa 文件含 '+roster.operators.length+' 条，账号名册已保存 '+merged.operators.length+' 条'+
+      (roster.syncTime ? '，Maa 同步时间 '+roster.syncTime : '')+'。');
   });
   $('saveBox').onclick = () => job('正在核对干员…',async signal=>{
     const raw = JSON.parse($('boxData').value);
@@ -179,7 +195,11 @@ export function setupGuides({post,events,getConfig,runDirect}) {
     if (file.size > 1024**2) throw new Error('请选择 1 MiB 以内的名册 JSON。');
     const raw = JSON.parse(await file.text());
     const roster = await request('roster/import',{operators:raw.operators ?? raw.own_opers,complete:raw.complete === true},signal);
-    saveRoster(roster,profileName()); status('已导入名册。');
+    const name = profileName();
+    const imported = Array.isArray(raw.own_opers) && !raw.operators
+      ? mergeMaaRosterFile(profiles.get(name),roster,raw.syncTime) : roster;
+    saveRoster(imported,name);
+    status('已导入名册，账号名册已保存 '+imported.operators.length+' 条。');
   });
   $('scanBox').onclick = () => job('Maa 正在翻页识别干员…',async signal=>{
     const name = profileName();
