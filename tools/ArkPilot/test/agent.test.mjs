@@ -242,6 +242,29 @@ test('画面变化后跳过旧点击，最后一次观察可以确认结果', as
   assert.deepEqual(f.emitted.filter(e => ['stale','end'].includes(e.type)).map(e => e.type), ['stale','end']);
 });
 
+test('主线地图动画变化时，点击位置须仍落在同一关号内', async () => {
+  const footer = [
+    { source: 'OCR', label: '当前进度', box: [1304, 790, 101, 25] },
+    { source: 'OCR', label: 'EPISODE', box: [1324, 821, 67, 11] },
+  ];
+  const stage = (label, x, other = footer) => ({
+    ...frame, client: 'com.hypergryph.arknights',
+    anchors: [{ id: 3, source: 'OCR', label, box: [x, 209, 89, 27] }, ...other],
+  });
+  const before = stage('H15 · 2', 404);
+  for (const [after, expected] of [
+    [stage('H15 ． 2', 391), 1], [stage('H15 一 3', 391), 0],
+    [stage('H15-2', 320), 0], [stage('H15-2', 391, footer.slice(1)), 0],
+    [stage('H15-2', 391, [...footer, { source: 'OCR', label: '取消', box: [420, 620, 90, 35] }]), 0],
+  ]) {
+    const f = fixture([{ type: 'tap', id: 3 }, { type: 'finish' }], { matches: () => false });
+    let reads = 0;
+    f.params.device.capture = async () => ++reads === 1 ? before : after;
+    await runAgent(f.params);
+    assert.equal(f.inputs.length, expected);
+  }
+});
+
 test('启动动画变化时只允许两帧都确认的明亮 START 图标', async () => {
   const data = Buffer.alloc(160 * 90 * 4);
   for (let i = 0; i < data.length; i += 4) { data[i] = 255; data[i+1] = 210; }
