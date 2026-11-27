@@ -9,7 +9,7 @@ import { parseEnv } from 'node:util';
 import path from 'node:path';
 import { listDevices, connectDevice, selectDevice } from './lib/device.mjs';
 import { isPracticeFormation, recognize } from './lib/vision.mjs';
-import { chooseModel, listModels, explainFrames, proposeTeam } from './lib/model.mjs';
+import { chooseModel, decide, listModels, explainFrames, proposeTeam } from './lib/model.mjs';
 import { requestsPracticeOnly, runAgent } from './lib/agent.mjs';
 import { chapterRewards, stageRewards } from './lib/rewards.mjs';
 import { briefPlan, checkPlan, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, roguelikePlacements, searchGuides } from './lib/guides.mjs';
@@ -253,6 +253,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
         const emit = job ? job.emit : eventStream(res);
         async function runCommand({instruction, signal, emit, history = [], guide = null, guideId, onGuideStart, resumeAfterStep, limit, expectedStage, intelExchange, inspectBase, allowNative = true, fixedTeam = false}) {
           let adaptationBlocked = false;
+          let lastNativeBattlePreview;
           let formation = !fixedTeam && data.formation === true;
           // First-clear instructions may describe earlier rehearsals as evidence.
           const practiceOnly = !queue && requestsPracticeOnly(instruction);
@@ -281,6 +282,7 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             const watchPause = afterStep ? watchBattlePause() : null;
             const selectedPanel = watchDaemonSelection(guide);
             const copilot = ['Copilot','ParadoxCopilot'].includes(a.task);
+            lastNativeBattlePreview = undefined;
             const selected = new Set();
             const formationReport = () => 'Maa 自动编队已选入' + [...selected].join('、') + '。请结合画面核对实际部署和结算。';
             let phase = '';
@@ -290,6 +292,9 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
                 const frame = await devicePreview(device, watching);
                 if (!watching.aborted) {
                   emit({type:'frame',...frame});
+                  if (copilot && config?.vision && frame.anchors.some(a=>a.source==='Maa' && a.label==='战斗防御点图标')) {
+                    lastNativeBattlePreview = frame.preview;
+                  }
                   if (copilot && battleDefeatScreen(frame)) {
                     const reason = '实机显示任务失败和点击画面以继续，作业已停止，失败页保留供核对。';
                     emit({type:'core',text:reason});
@@ -424,7 +429,12 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             await runNative({type:'maa',task:'Copilot'},step);
             return 'Maa 已执行后续作业，请核对同一局的结算。';
           } : undefined;
-          await runAgent({ config, device, instruction, history, continueBattle, intelExchange, inspectBase, practiceOnly, retryModel:queue, requireAdaptation:queue ? false : undefined,
+          const plan = async (modelConfig,context,frame,planSignal) => {
+            const decision = await decide(modelConfig,context,frame,planSignal,lastNativeBattlePreview);
+            lastNativeBattlePreview = undefined;
+            return decision;
+          };
+          await runAgent({ config, device, instruction, history, plan, continueBattle, intelExchange, inspectBase, practiceOnly, retryModel:queue, requireAdaptation:queue ? false : undefined,
             readOnly: researchOnly || data.readOnly === true, limit, signal, emit, guidance, lookupGuide, runNative:device && home && allowNative ? runNative : null });
         }
         if (queue) {

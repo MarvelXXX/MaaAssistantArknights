@@ -160,12 +160,19 @@ export async function explainFrames(config, frames, signal) {
   return {notes:notes.trim().slice(0,6000), source:'视频片段采样解读'};
 }
 
-export async function decide(config, context, frame, signal) {
+export async function decide(config, context, frame, signal, lastNativeBattlePreview) {
   const observation = { width: frame.width, height: frame.height, recognition: frame.recognition, targets: frame.anchors };
   const prompt = JSON.stringify({ ...context, input: frame.preview && config.vision ? '图片与识别结果' : '文字观察', observation });
   const content = config.vision && frame.preview
     ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: frame.preview } }]
     : prompt;
+  if (Array.isArray(content) && lastNativeBattlePreview && lastNativeBattlePreview !== frame.preview) {
+    content.unshift(
+      {type:'text',text:'第一张是刚才 Maa 执行作业时记录的战场截图，仅用于复核可见的部署和战况。'},
+      {type:'image_url',image_url:{url:lastNativeBattlePreview}},
+      {type:'text',text:'第二张是当前实机画面。只能用第二张及其识别目标选择下一步操作。'}
+    );
+  }
   const payload = {model:config.model,stream:false,messages:[{role:'system',content:instructions+'\n本轮可用的资料工具及参数\n'+toolList},{role:'user',content}]};
   let result;
   if (selectedProvider(config)==='api' && !config.toolsUnsupported) {
