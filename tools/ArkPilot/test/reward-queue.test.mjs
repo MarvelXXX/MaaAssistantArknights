@@ -36,7 +36,19 @@ test('凭证兑换同时核对两项余额、扣券量与库存，不重复记�
     assert.match(renderProgress({targets:[t]},ledger),/首通 0 项、领取免费奖励 0 项、核实凭证兑换 1 项/);
   }
 });
-import {watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
+import {battleDefeatScreen,watchBattlePause,watchDaemonSelection,watchTutorialDialog} from '../lib/maa.mjs';
+
+test('作业失败需同时看到失败标题和底部继续提示',()=>{
+  const title={source:'OCR',label:'一 MISSION FAILED',box:[128,485,386,32]};
+  const footer={source:'OCR',label:'点击画面以继续',box:[686,809,227,31]};
+  const matches=(...anchors)=>battleDefeatScreen({width:1600,height:900,anchors});
+  assert.equal(matches(title,footer),true);
+  assert.equal(matches({...title,label:'任 务 失 败'},footer),true);
+  assert.equal(matches(title),false);
+  assert.equal(matches(footer),false);
+  assert.equal(matches({...title,box:[800,20,380,32]},footer),false);
+  assert.equal(matches(title,{...footer,label:'点击继续作战'}),false);
+});
 
 test('同关重试锚定当轮起点，恢复中断保留原始起点及最新余额', () => {
   const wallet = {prime:167, orundum:27078};

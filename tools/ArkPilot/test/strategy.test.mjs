@@ -143,7 +143,7 @@ test('要求生成替补作业时不能把文字承诺当作完成，校验失�
 test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无设备时可适配',async t=>{
   const decision = a => ({intent:'operate',goal:'按我的干员适配',note:'核对编队',action:{type:a,...(a==='maa'?{task:'Copilot'}:{})}});
   let actions = ['adapt_guide','maa','finish'];
-  let observedRoster;
+  let observedRoster, failAfterSelection = false;
   let formationReport;
   const formationStates=[];
   const model = await listen(http.createServer(async(req,res)=>{
@@ -167,6 +167,7 @@ test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无�
     for (const selectedOperator of ['克洛丝','芬','克洛丝']) {
       options.progress('Maa 自动编队选入 '+selectedOperator,{selectedOperator});
     }
+    if (failAfterSelection) throw new Error('任务失败');
   }}),t);
   const run = async extra=>{
     const res=await fetch(app+'/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
@@ -188,6 +189,11 @@ test('同条指令把替补方案和自动编队传给 Maa；仅查攻略在无�
   assert.equal(devices,1); assert.equal(native.length,1);
   actions=['maa'];
   assert.match((await run({researchOnly:true})).at(-1).text,/只读/);
+  failAfterSelection=true;
+  formationReport=undefined;
+  actions=['adapt_guide','maa','finish'];
+  await run({});
+  assert.match(formationReport,/任务失败.*已选入克洛丝、芬。/);
 });
 
 test('首通自动编队传递缺位助战，普通指令和未开启自动编队时保留原检查',async t=>{
