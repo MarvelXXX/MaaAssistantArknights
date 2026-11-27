@@ -98,6 +98,26 @@ test('实用工具以函数调用发送，将取帧结果作为工具回复交�
   assert.match(requests[1].messages.at(-1).content,/15.9/);
 });
 
+test('Maa 战场截图可供复核，操作依据始终是最后一张当前画面',async t=>{
+  const requests = [];
+  t.mock.method(globalThis,'fetch',async (_url,options)=>{
+    requests.push(JSON.parse(options.body).messages[1].content);
+    return Response.json({choices:[{message:{content:JSON.stringify({intent:'inspect',goal:'看战果',note:'已核对',action:{type:'finish'}})}}]});
+  });
+  const config={provider:'api',apiOptIn:true,url:'http://localhost/v1',model:'test',vision:true};
+  const context={instruction:'核实部署与结算',recentSteps:[]}, signal=AbortSignal.timeout(5000);
+  const current={preview:'current',anchors:[{label:'行动结束'}]};
+  await decide(config,context,current,signal,'battle');
+  assert.deepEqual(requests[0].filter(part=>part.type==='image_url').map(part=>part.image_url.url),['battle','current']);
+  assert.match(requests[0][0].text,/刚才 Maa/);
+  assert.match(requests[0][2].text,/只能用第二张/);
+  assert.deepEqual(JSON.parse(requests[0][3].text).observation.targets,current.anchors);
+  await decide(config,context,current,signal,current.preview);
+  assert.equal(requests[1].filter(part=>part.type==='image_url').length,1);
+  await decide({...config,vision:false},context,current,signal,'battle');
+  assert.equal(typeof requests[2],'string');
+});
+
 test('更换核心干员技能时仍保留对其专属召唤物的依赖检查',async()=>{
   const roster = await normalizeRoster({operators:[{name:'令',elite:2,level:80}]});
   const plan = {stage_name:'1-7',opers:[{name:'令',skill:3}],actions:[
