@@ -28,6 +28,23 @@ function requestsBaseInspection(text) {
   return /基建|贸易站|制造站/.test(text) && /只读|只(?:看|查看|核查)|仅(?:看|查看|核查)|(?:查看|核对|检查)[^。]{0,48}(?:不要|不准|禁止|不得)(?:交付|收取|收货)/.test(text);
 }
 
+function archiveCatalog(frame) {
+  const header=frame.anchors.filter(a=>a.source==='OCR' && a.box?.[1]<frame.height*0.15)
+    .map(a=>a.label.replace(/\s/g,'')).join(' ');
+  return /开启时间|開啟時間/.test(header) || ['默认进度','奖励进度','完成进度'].filter(label=>header.includes(label)).length>=2;
+}
+
+function archiveTitlesSettled(previous, current) {
+  if (previous.width!==current.width || previous.height!==current.height || previous.client!==current.client) return false;
+  const titles=frame=>frame.anchors.filter(a=>a.source==='OCR' && a.label.trim().length>=2 &&
+    a.box?.[0]>frame.width*0.12 && a.box[1]>frame.height*0.18 && a.box[1]<frame.height*0.9);
+  const before=titles(previous);
+  const tolerance=Math.max(2,current.height*0.004);
+  const stationary=titles(current).filter(a=>before.some(b=>b.label===a.label &&
+    Math.abs(b.box[0]-a.box[0])<=tolerance && Math.abs(b.box[1]-a.box[1])<=tolerance));
+  return new Set(stationary.map(a=>a.label)).size>=2;
+}
+
 function gameStartTap(frame, action) {
   if (action.type !== 'tap' || !frame.image ||
       !['com.hypergryph.arknights','com.hypergryph.arknights.bilibili'].includes(frame.client)) return false;
@@ -233,6 +250,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
   const protectsCurrency = practiceOnly || noPremiumSpend.test(instruction);
   let submittedExchange = false;
   let afterNativeBattle = false, settledResult = false;
+  let afterArchiveSwipe = false;
   let blockedBaseInputs=0;
   async function observeGame(raw) {
     const frame=await observe(raw,signal);
@@ -257,6 +275,17 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     if (device) {
       emit({ type: 'status', text: '正在识别游戏画面', turn });
       frame = await observeGame(await device.capture(signal));
+      if (afterArchiveSwipe) {
+        emit({type:'status',text:'等待活动列表停稳，再定位关卡',turn});
+        for (let sample=0; sample<4; sample++) {
+          await pause(350,signal);
+          const latest=await observeGame(await device.capture(signal));
+          const settled=archiveTitlesSettled(frame,latest);
+          frame=latest;
+          if (settled || !archiveCatalog(latest)) break;
+        }
+        afterArchiveSwipe=false;
+      }
       if (afterNativeBattle && frame.preview && !frame.anchors?.length) {
         emit({type:'status',text:'Maa 已返回，正在复核过渡画面',turn});
         await pause(1000, signal);
@@ -421,6 +450,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
           submittedExchange = true;
         }
         await device.input(action, signal);
+        afterArchiveSwipe=action.type==='swipe' && Math.abs(action.y2-action.y)>Math.abs(action.x2-action.x) && archiveCatalog(frame);
       }
       previousInput = { signature, png: frame.png };
     }

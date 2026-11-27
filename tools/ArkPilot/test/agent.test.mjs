@@ -96,6 +96,35 @@ function fixture(results, overrides = {}) {
   return { inputs, emitted, abort, params };
 }
 
+test('活动列表滑动后使用停稳的卡片位置，离开列表或在其他页面滑动及时交回',async()=>{
+  const library=(y,heading='开启时间')=>({...frame,anchors:[
+    {source:'OCR',label:heading,box:[1200,30,110,35]},
+    {source:'OCR',label:'吾导先路',box:[700,y,120,30]},
+    {source:'OCR',label:'尘影余音',box:[920,y,120,30]},
+  ]});
+  const other={...frame,anchors:[{source:'OCR',label:'首页',box:[80,60,60,40]}]};
+  for (const [frames,expected,waits] of [
+    [[library(620),library(340),library(270),library(265),library(265)],[620,265],[800,350,350,350]],
+    [[library(620),library(340),other],[620,'首页'],[800,350]],
+    [[library(620,'默认进度 奖励进度'),library(340,'默认进度 奖励进度'),library(340,'默认进度 奖励进度')],[620,340],[800,350]],
+    [[other,other],['首页','首页'],[800]],
+  ]) {
+    const seen=[],delays=[];
+    const game=fixture([],{
+      observe:async()=>frames.shift(),
+      pause:async ms=>delays.push(ms),
+      plan:async(_config,_context,view)=>{
+        seen.push(view.anchors[1]?.box[1]??view.anchors[0].label);
+        return answer(seen.length===1?{type:'swipe',x:760,y:800,x2:760,y2:300,ms:450}:{type:'finish'});
+      },
+    });
+    await runAgent(game.params);
+    assert.deepEqual(seen,expected);
+    assert.deepEqual(delays,waits);
+    assert.equal(game.inputs.length,1);
+  }
+});
+
 test('结算动画结束后才规划和发出截图，留在同一结算页只等一次', async () => {
   const ratings = ['结算二星标志','结算三星标志','结算三星标志'];
   const seen = [], waits = [];
