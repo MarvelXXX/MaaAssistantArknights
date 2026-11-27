@@ -257,8 +257,11 @@ test('演习作业交接时重读当帧 PLAN，退出编队后不会从详情开
   const rehearsal = PNG.sync.write(canvas);
   let frames, turn;
   const calls=[];
+  const observedModes=[];
   const model=await listen(http.createServer(async(req,res)=>{
-    for await(const _ of req) {}
+    let body='';
+    for await(const chunk of req) body+=chunk;
+    observedModes.push(JSON.parse(JSON.parse(body).messages[1].content).practiceOnly);
     const action=turn++===0 ? {type:'maa',task:'Copilot'} : {type:'finish'};
     res.setHeader('Content-Type','application/json');
     res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({intent:'operate',goal:'演习',note:'检查交接',action})}}]}));
@@ -266,11 +269,11 @@ test('演习作业交接时重读当帧 PLAN，退出编队后不会从详情开
   const app=await listen(createServer({getHome:async()=>'fixture',getDevice:async()=>({
     capture:async()=>({png:frames.length>1?frames.shift():frames[0],width:1280,height:720,client:'com.hypergryph.arknights'}),
   }),native:async(_,options)=>{calls.push(options.practiceOnly);}}),t);
-  const run=async images=>{
+  const run=async (images,instruction='只演习一次')=>{
     turn=0;
     frames=images;
     const response=await fetch(app+'/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      guide:author,provider:'api',apiOptIn:true,url:model,model:'fixture',vision:false,instruction:'只演习一次',
+      guide:author,provider:'api',apiOptIn:true,url:model,model:'fixture',vision:false,instruction,
     })});
     return (await response.text()).trim().split('\n').map(JSON.parse);
   };
@@ -279,6 +282,11 @@ test('演习作业交接时重读当帧 PLAN，退出编队后不会从详情开
   assert.deepEqual(calls,[]);
   await run([rehearsal]);
   assert.deepEqual(calls,[true]);
+  assert.ok(observedModes.length >= 2 && observedModes.every(mode=>mode===true));
+  observedModes.length=0;
+  await run([detail],'打一场正式作战');
+  assert.deepEqual(calls,[true,false]);
+  assert.ok(observedModes.length && observedModes.every(mode=>mode===false));
 });
 
 test('集成战略站位根据实机宽高投影，同地图的普通与紧急编号可以分别查询', async () => {

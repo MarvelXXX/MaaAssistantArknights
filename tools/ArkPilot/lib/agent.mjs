@@ -278,7 +278,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
       recognition: frame.recognition, anchors: frame.anchors, client: frame.client, turn });
     emit({ type: 'status', text: '等待模型判断', turn });
     const context = { instruction, conversation: history, turn, stepsSoFar: actionCount,
-      remainingActions: limit - actionCount, readOnly, recentSteps: recent(), maaAvailable: !!runNative, guidance };
+      remainingActions: limit - actionCount, readOnly, practiceOnly, recentSteps: recent(), maaAvailable: !!runNative, guidance };
     if (steps.length > 18) {
       context.earlierObservations = steps.slice(3,-15).map(step => ({
         turn: step.turn, action: step.action.type, note: step.note.slice(0,320),
