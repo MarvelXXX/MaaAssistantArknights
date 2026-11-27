@@ -8,6 +8,22 @@ export function matchesArchiveTitle(label,target) {
   return suffix.length>=8 && label.toUpperCase().replace(/[^A-Z]/g,'').includes(suffix);
 }
 
+export function matchesArchiveDetail(frame,target) {
+  const panel = frame.anchors.filter(a=>a.source==='OCR' && a.box && a.box[0]>frame.width*0.52);
+  if (!panel.some(a=>a.box[1]>frame.height*0.73 && /进入活动|解锁/.test(compact(a.label)))) return false;
+  if (panel.some(a=>a.box[1]<frame.height*0.4 && matchesArchiveTitle(a.label,target))) return true;
+  const han = text => text.replace(/[^\p{Script=Han}]/gu,'');
+  const lines=(target.description || '').split(/\r?\n/).map(han).filter(s=>s.length>=8);
+  const observed = panel.filter(a=>a.box[1]>frame.height*0.40 && a.box[1]<frame.height*0.84).map(a=>han(a.label));
+  const matched = new Set();
+  for (const text of observed) {
+    if (text.length<8) continue;
+    const line=lines.find(s=>s.includes(text) || text.includes(s));
+    if (line) matched.add(line);
+  }
+  return matched.size>=2;
+}
+
 function catalogPosition({image:{width,height,data}}) {
   const samples=[];
   for (let row=1;row<=6;row++) for (let col=1;col<=9;col++) {
@@ -28,9 +44,7 @@ export async function navigateArchive(target,device,signal,native,progress) {
     }
     return matches();
   };
-  const chapterDetail = () => frame.anchors.some(a=>a.box && a.box[0]>frame.width*0.52 &&
-    a.box[1]<frame.height*0.4 && matchesArchiveTitle(a.label,target)) &&
-    frame.anchors.some(a=>a.box && a.box[1]>frame.height*0.73 && /进入活动|解锁/.test(compact(a.label)));
+  const chapterDetail = () => matchesArchiveDetail(frame,target);
   const tap = async point => {
     await device.input({type:'tap',...point},signal);
     await delay(900,undefined,{signal});
@@ -45,23 +59,28 @@ export async function navigateArchive(target,device,signal,native,progress) {
     await tap(matches[0]);
     return true;
   };
+  const atTerminal = () => frame.anchors.some(anchor=>/前往.*作战|前往.*乍战/.test(compact(anchor.label))) ||
+    frame.anchors.some(anchor=>compact(anchor.label)==='乐章') && frame.anchors.some(anchor=>/数据增补|增补仪/.test(compact(anchor.label)));
+  const catalogLink = () => frame.anchors.some(a=>a.box && a.box[0]>0.75*frame.width && a.box[1]<0.18*frame.height && compact(a.label)==='乐章收录');
+  const timeline = () => frame.anchors.some(a=>a.box && a.box[1]<frame.height*0.15 && /开启时间/.test(compact(a.label)));
+  const catalogFilters = () => frame.anchors.some(anchor=>/默认进度|奖励进度|完成进度/.test(compact(anchor.label)));
   if (frame.anchors.some(anchor=>anchor.source==='Maa' && anchor.label==='主界面设置入口')) {
     await native('Terminal-Entry');
     frame = await capture();
+    await waitForFrame(atTerminal);
   }
-  if (frame.anchors.some(anchor=>/前往.*作战|前往.*乍战/.test(compact(anchor.label))) ||
-      frame.anchors.some(anchor=>compact(anchor.label)==='乐章') && frame.anchors.some(anchor=>/数据增补|增补仪/.test(compact(anchor.label)))) {
+  if (atTerminal()) {
     progress?.('从作战终端打开曲谱');
     await native('Stop@StageTheme');
-    await delay(500,undefined,{signal});
     frame = await capture();
+    await waitForFrame(catalogLink);
   }
-  await tapText('乐章收录',(x,y)=>x>0.75 && y<0.18);
-  if (frame.anchors.some(anchor=>/默认进度|奖励进度|完成进度/.test(compact(anchor.label)))) {
-    await tapText('乐章',(x,y)=>x>0.9 && y<0.12);
+  if (catalogLink() && await tapText('乐章收录',(x,y)=>x>0.75 && y<0.18)) {
+    await waitForFrame(catalogFilters);
   }
-  const timeline = () => frame.anchors.some(a=>a.box && a.box[1]<frame.height*0.15 &&
-    /开启时间/.test(compact(a.label)));
+  if (catalogFilters() && !timeline() && await tapText('乐章',(x,y)=>x>0.9 && y<0.12)) {
+    await waitForFrame(timeline);
+  }
   let direction=1;
   let onTimeline=timeline(),selectionAttempts=0;
   for (let page=0;page<48;page++) {

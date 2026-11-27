@@ -9,7 +9,7 @@ import { copilotDefeatReport, nativeAction, paradoxNavigationPlan, recognizedDef
 import { normalizeRoster, rosterFit } from '../lib/roster.mjs';
 import { runAgent, validateDecision } from '../lib/agent.mjs';
 import { explainFrames } from '../lib/model.mjs';
-import { matchesArchiveTitle } from '../lib/archive-navigation.mjs';
+import { matchesArchiveTitle, matchesArchiveDetail } from '../lib/archive-navigation.mjs';
 import { nativeCommand } from '../public/native-commands.js';
 
 const plan = {stage_name:'main_01-07', opers:[{name:'令',skill:3}], actions:[
@@ -29,6 +29,20 @@ test('常驻地图指令限定普通关号，曲谱可识别国服活动的英�
   assert.equal(matchesArchiveTitle('A GRAND OVERTURE',target),true);
   assert.equal(matchesArchiveTitle('追 迹 日 落 以 西',target),true);
   assert.equal(matchesArchiveTitle('OVERTURE',target),false);
+});
+
+test('活动艺术字漏读时用右侧两段不同简介核实章节',()=>{
+  const chapter={chapter:'不义之财',englishTitle:'Come Catastrophes or Wakes of Vultures',
+    description:'能源塔的余热，曾温暖着达维镇。\n人们期盼着的明天，却如烟囱口的白烟一般消散。\n寒风凛冽，这个冬天注定漫长无歇。'};
+  const row=(label,x,y)=>({source:'OCR',label,box:[x,y,100,20]});
+  const button=row('0 进入活动',1200,770), first=row('寒风凛冽，这个冬天注定漫长无歇。',930,505);
+  const second=row('人们期盼着的明天 ， 却如烟囱口的白烟一般消散',930,455);
+  const match=(...anchors)=>matchesArchiveDetail({width:1440,height:810,anchors},chapter);
+  assert.equal(match(button,row('OF',1100,210),first,second),true);
+  assert.equal(match(button,first,first),false);
+  assert.equal(match(button,first,{...second,box:[150,455,100,20]}),false);
+  assert.equal(match(first,second),false);
+  assert.equal(match(button,row('不义之财',925,170)),true);
 });
 
 test('原生任务链结束时保留实战失败回调与最近一次有效击倒数', async t => {
