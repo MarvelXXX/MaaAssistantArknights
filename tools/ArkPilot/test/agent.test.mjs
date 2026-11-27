@@ -125,6 +125,30 @@ test('活动列表滑动后使用停稳的卡片位置，离开列表或在其�
   }
 });
 
+test('干员横向列表用移动卡片的横坐标确认停稳',async()=>{
+  const positions=[980,700,522,520];
+  const seen=[],delays=[];
+  const game=fixture([],{
+    observe:async()=>{
+      const x=positions.shift();
+      return {...frame,anchors:[
+        {source:'OCR',label:'ALL',box:[1510,107,40,20]},
+        {source:'OCR',label:'收起 〉',box:[1510,35,65,22]},
+        {source:'OCR',label:'杜宾',box:[x,400,65,25]},
+        {source:'OCR',label:'暴行',box:[x+200,400,65,25]},
+      ]};
+    },
+    pause:async ms=>delays.push(ms),
+    plan:async(_config,_context,view)=>{
+      seen.push(view.anchors[2].box[0]);
+      return answer(seen.length===1?{type:'swipe',x:850,y:600,x2:250,y2:600,ms:430}:{type:'finish'});
+    },
+  });
+  await runAgent(game.params);
+  assert.deepEqual(seen,[980,520]);
+  assert.deepEqual(delays,[800,350,350]);
+});
+
 test('结算动画结束后才规划和发出截图，留在同一结算页只等一次', async () => {
   const ratings = ['结算二星标志','结算三星标志','结算三星标志'];
   const seen = [], waits = [];
