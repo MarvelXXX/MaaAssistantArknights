@@ -71,6 +71,18 @@ export function watchTutorialDialog() {
   };
 }
 
+export function battleDefeatScreen({anchors,width,height}) {
+  const words = anchors.filter(a=>a.source==='OCR' && a.box);
+  const heading = words.some(({label,box:[x,y,w,h]}) => {
+    const line = label.replace(/[\s\p{P}\p{S}]/gu,'');
+    return /^(?:任务失败|任務失敗|一?MISSIONFAILED)$/i.test(line) &&
+      (x+w/2)<width*0.5 && (y+h/2)>height*0.33 && (y+h/2)<height*0.68;
+  });
+  return heading && words.some(({label,box:[x,y,w,h]}) =>
+    /^(?:点击画面以继续|點擊畫面以繼續|TAP(?:THESCREEN)?TOCONTINUE)$/i.test(label.replace(/[\s\p{P}\p{S}]/gu,'')) &&
+    Math.abs((x+w/2)/width-0.5)<0.22 && (y+h/2)>height*0.78);
+}
+
 export function pausedBattleFrame({anchors,width,height}) {
   return anchors.some(a=>a.source==='Maa' && a.label==='战斗防御点图标') && anchors.some(a=>{
     if (a.source!=='OCR' || !a.box || !/暂停中|暫停中|PAUSE(?:D)?/i.test(a.label.replace(/\s/g,''))) return false;

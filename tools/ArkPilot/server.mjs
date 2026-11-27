@@ -13,7 +13,7 @@ import { chooseModel, listModels, explainFrames, proposeTeam } from './lib/model
 import { requestsPracticeOnly, runAgent } from './lib/agent.mjs';
 import { chapterRewards, stageRewards } from './lib/rewards.mjs';
 import { briefPlan, checkPlan, importGuide, matchesRewardStage, openBiliMedia, paradoxStageId, roguelikePlacements, searchGuides } from './lib/guides.mjs';
-import { executeMaa, maaHome, nativeAction, pausedBattleFrame, recognizeRecording, scanRoster, watchBattlePause, watchDaemonSelection, watchTutorialDialog } from './lib/maa.mjs';
+import { battleDefeatScreen, executeMaa, maaHome, nativeAction, pausedBattleFrame, recognizeRecording, scanRoster, watchBattlePause, watchDaemonSelection, watchTutorialDialog } from './lib/maa.mjs';
 import { adaptGuide, normalizeRoster, rosterFit } from './lib/roster.mjs';
 import { analyzeVideo, readWiki, searchWeb } from './lib/research.mjs';
 import { runRewardQueue } from './lib/reward-queue.mjs';
@@ -280,6 +280,9 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             const stalled = fixedTeam ? watchTutorialDialog() : null;
             const watchPause = afterStep ? watchBattlePause() : null;
             const selectedPanel = watchDaemonSelection(guide);
+            const copilot = ['Copilot','ParadoxCopilot'].includes(a.task);
+            const selected = new Set();
+            const formationReport = () => 'Maa 自动编队已选入' + [...selected].join('、') + '。请结合画面核对实际部署和结算。';
             let phase = '';
             let timer;
             const updateFrame = async () => {
@@ -287,6 +290,12 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
                 const frame = await devicePreview(device, watching);
                 if (!watching.aborted) {
                   emit({type:'frame',...frame});
+                  if (copilot && battleDefeatScreen(frame)) {
+                    const reason = '实机显示任务失败和点击画面以继续，作业已停止，失败页保留供核对。';
+                    emit({type:'core',text:reason});
+                    observer.abort(new Error(reason));
+                    return;
+                  }
                   const pause = watchPause?.(frame,Date.now());
                   if (pause==='resume') {
                     const fresh = await devicePreview(device,watching);
@@ -310,13 +319,18 @@ export function createServer({ getDevice = selectDevice, getHome = maaHome, nati
             timer = setTimeout(updateFrame, 1500);
             try {
               if (guideId) onGuideStart?.(guideId);
-              const selected = new Set();
               await native(a, {home,device,serial:data.serial,guide,formation,practiceOnly,borrowSupport:!!supportSlot,afterStep,signal:watching,progress:(text,evidence)=>{
                 if (evidence?.selectedOperator) selected.add(evidence.selectedOperator);
                 phase = text;
                 emit({type:'core',text});
               }});
-              if (selected.size) return 'Maa 自动编队已选入' + [...selected].join('、') + '。请结合画面核对实际部署和结算。';
+              watching.throwIfAborted();
+              if (selected.size) return formationReport();
+            } catch (error) {
+              signal.throwIfAborted();
+              const reason = observer.signal.reason || error;
+              if (!selected.size || reason.beforeStart) throw reason;
+              throw new Error(reason.message+' '+formationReport(),{cause:reason});
             } finally {
               observer.abort();
               clearTimeout(timer);
