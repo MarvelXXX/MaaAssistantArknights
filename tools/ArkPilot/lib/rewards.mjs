@@ -101,8 +101,15 @@ export async function archiveStage(code, signal) {
   const [stage] = matches;
   const chapter = archive.retroActList[archive.zoneToRetro[stage.zoneId]];
   if (!chapter || chapter.startTime>Date.now()/1000) throw new Error('这项活动尚未收录。');
-  const englishTitle = chapter.retroId.replace(/^permanent_(?:sub|main)_\d+_/,'').replaceAll('_',' ');
-  return {code,chapter:chapter.name,englishTitle,name:stage.name};
+  const englishTitle = chapter.retroId.replace(/^permanent_(?:sub|main|sidestory)_\d+_/,'').replaceAll('_',' ');
+  // The catalog uses illustrated logos. Its detail panel also prints the public chapter synopsis.
+  let description = '';
+  try {
+    const {storylineStorySets} = await table('stage_table',signal);
+    description = Object.values(storylineStorySets || {}).find(row=>
+      chapter.linkedActId?.includes(row.relevantActivityId) && row.ssData?.desc)?.ssData.desc || '';
+  } catch { signal?.throwIfAborted(); }
+  return {code,chapter:chapter.name,englishTitle,name:stage.name,description};
 }
 
 export function matchSimulations(query, stages, operators) {
