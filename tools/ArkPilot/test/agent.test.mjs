@@ -235,6 +235,25 @@ test('首通决策临时断连后重新截图，保留此前已做动作且只�
     assert.equal(h.emitted.filter(e=>e.type==='frame').length,1);
   }
 });
+test('普通订阅对话在临时超时后读取新画面，不重发已执行的点击',async()=>{
+  const temporary=Object.assign(new Error('Codex 模型响应超时。'),{code:'MODEL_TEMPORARY'});
+  const frames=[], waits=[];
+  let sequence=0;
+  const f=fixture([],{
+    config:{provider:'codex',vision:true}, limit:3, pause:async ms=>waits.push(ms),
+    observe:async raw=>({...raw,sequence:++sequence}),
+    plan:async(_config,context,current)=>{
+      frames.push([current.sequence,context.stepsSoFar]);
+      if (frames.length===1) return answer({type:'tap',id:3});
+      if (frames.length===2) throw temporary;
+      return answer({type:'finish'});
+    },
+  });
+  await runAgent(f.params);
+  assert.deepEqual(frames,[[1,0],[2,1],[3,1]]);
+  assert.deepEqual(f.inputs,[{type:'tap',x:645,y:70}]);
+  assert.equal(waits.filter(ms=>ms===10000).length,1);
+});
 test('画面变化后跳过旧点击，最后一次观察可以确认结果', async () => {
   const f = fixture([{ type:'tap', id:3 }, { type:'ask' }], { matches: () => false });
   await runAgent(f.params);

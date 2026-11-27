@@ -275,6 +275,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
   observe = recognize, plan = decide, matches = stillMatches, pause = (ms, s) => delay(ms, undefined, { signal: s }) }) {
   const steps = [];
   const attemptedTasks = new Set();
+  const retryDecisions = retryModel || config.provider === 'codex';
   const protectsCurrency = practiceOnly || noPremiumSpend.test(instruction);
   let submittedExchange = false;
   let afterNativeBattle = false, settledResult = false;
@@ -348,7 +349,7 @@ export async function runAgent({ config, device, instruction, history, readOnly,
     try { reply = await plan(config, context, frame, signal); }
     catch (error) {
       signal.throwIfAborted();
-      if (!retryModel || error.code!=='MODEL_TEMPORARY' || modelRetries>=2) throw error;
+      if (!retryDecisions || error.code!=='MODEL_TEMPORARY' || modelRetries>=2) throw error;
       const seconds = Math.max([10,30][modelRetries++],Math.ceil((error.retryAfterMs || 0)/1000));
       emit({type:'status',text:'模型连接暂时中断，'+seconds+' 秒后重新观察当前画面。',turn});
       await pause(seconds*1000,signal);
