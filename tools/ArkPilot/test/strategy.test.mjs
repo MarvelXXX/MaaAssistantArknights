@@ -9,7 +9,7 @@ import { searchWeb } from '../lib/research.mjs';
 import { decide } from '../lib/model.mjs';
 import { requestsPracticeOnly, runAgent } from '../lib/agent.mjs';
 import { createServer } from '../server.mjs';
-import { mergeMaaRosterFile, mergeRosterScan } from '../public/guides.js';
+import { formationForRun, mergeMaaRosterFile, mergeRosterScan } from '../public/guides.js';
 
 const author = {stage_name:'main_01-07',opers:[{name:'能天使',skill:1,requirements:{elite:1,level:40}}],
   groups:[{name:'回费位',opers:[{name:'芬',skill:1},{name:'讯使',skill:1}]}],actions:[
@@ -31,6 +31,14 @@ test('局部扫描更新等级、保留未扫到的干员和手填技能，完�
   assert.deepEqual(mergeRosterScan(old,{complete:true,operators:seen}).operators,partial.operators.slice(0,2));
   assert.deepEqual(mergeRosterScan(undefined,{complete:false,operators:seen}).operators,seen);
   assert.equal(old.operators[1].level,1);
+});
+
+test('首通清单在新标签页默认自动编队，显式关闭和单次作业的选择仍生效',()=>{
+  assert.equal(formationForRun(false,null,true),true);
+  assert.equal(formationForRun(false,'true',true),true);
+  assert.equal(formationForRun(true,'false',true),false);
+  assert.equal(formationForRun(false,null,false),false);
+  assert.equal(formationForRun(true,'false',false),true);
 });
 
 test('部分 Maa 存档按实际同步时间合并，保留较新的培养和遗漏的干员',()=>{
