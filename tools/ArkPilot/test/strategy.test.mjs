@@ -9,7 +9,7 @@ import { searchWeb } from '../lib/research.mjs';
 import { decide } from '../lib/model.mjs';
 import { requestsPracticeOnly, runAgent } from '../lib/agent.mjs';
 import { createServer } from '../server.mjs';
-import { mergeRosterScan } from '../public/guides.js';
+import { mergeMaaRosterFile, mergeRosterScan } from '../public/guides.js';
 
 const author = {stage_name:'main_01-07',opers:[{name:'能天使',skill:1,requirements:{elite:1,level:40}}],
   groups:[{name:'回费位',opers:[{name:'芬',skill:1},{name:'讯使',skill:1}]}],actions:[
@@ -31,6 +31,21 @@ test('局部扫描更新等级、保留未扫到的干员和手填技能，完�
   assert.deepEqual(mergeRosterScan(old,{complete:true,operators:seen}).operators,partial.operators.slice(0,2));
   assert.deepEqual(mergeRosterScan(undefined,{complete:false,operators:seen}).operators,seen);
   assert.equal(old.operators[1].level,1);
+});
+
+test('部分 Maa 存档按实际同步时间合并，保留较新的培养和遗漏的干员',()=>{
+  const july = '2026-07-01T00:00:00Z', november = '2026-11-01T00:00:00Z';
+  const early = {complete:false,operators:[{id:'a',elite:0,level:50},{id:'b',elite:1,level:10}]};
+  const recent = {complete:false,operators:[{id:'a',elite:2,level:1,skill_level:7},{id:'c',elite:2,level:60}]};
+  const first = mergeMaaRosterFile(undefined, early, july);
+  assert.equal(first.observedAt,Date.parse(july));
+  const next = mergeMaaRosterFile({roster:first,observedAt:first.observedAt}, recent, november);
+  assert.deepEqual(next.operators,[...recent.operators,early.operators[1]]);
+  for (const date of [july,undefined]) {
+    const repeated = mergeMaaRosterFile({roster:recent,updated:november},early,date);
+    assert.deepEqual(repeated.operators,next.operators);
+    assert.equal(repeated.observedAt,Date.parse(november));
+  }
 });
 
 test('名册区分未持有、未知、技能未解锁、专精未知与已记录的专精',async()=>{
