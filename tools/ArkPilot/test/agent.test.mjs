@@ -113,6 +113,42 @@ test('结算动画结束后才规划和发出截图，留在同一结算页只�
   assert.deepEqual(f.emitted.filter(e=>e.type==='frame').map(e=>e.anchors[0].label),seen);
 });
 
+test('Maa 提前交回仍在作战的画面时立即继续观察，切到结算才延时复核', async () => {
+  const labels = ['编队页开始行动','战斗防御点图标','结算二星标志','结算三星标志'];
+  const seen = [], waits = [];
+  const actions = [{type:'maa',task:'Copilot'},{type:'wait',ms:300},{type:'finish'}];
+  const f = fixture([], {
+    limit:2, guidance:{plan:{stage:'test'}}, runNative:async () => '部署完毕',
+    observe:async () => ({...frame, preview:'game', anchors:[{label:labels.shift()}]}),
+    pause:async ms => waits.push(ms),
+    plan:async (_config,_context,current) => {
+      seen.push(current.anchors[0].label);
+      return answer(actions.shift());
+    },
+  });
+  await runAgent(f.params);
+  assert.deepEqual(seen,['编队页开始行动','战斗防御点图标','结算三星标志']);
+  assert.deepEqual(waits,[800,300,4500]);
+});
+
+test('Maa 返回空白过渡帧后单独等待真正的结算动画',async () => {
+  const screens = [['编队页开始行动'],[],['结算二星标志'],['结算三星标志']];
+  const seen = [], waits = [];
+  const actions=[{type:'maa',task:'Copilot'},{type:'finish'}];
+  const f=fixture([],{
+    guidance:{plan:{stage:'test'}},runNative:async()=>{},
+    observe:async()=>({...frame,preview:'game',anchors:screens.shift().map(label=>({label}))}),
+    pause:async ms=>waits.push(ms),
+    plan:async (_config,_context,current)=>{
+      seen.push(current.anchors.map(a=>a.label));
+      return answer(actions.shift());
+    },
+  });
+  await runAgent(f.params);
+  assert.deepEqual(seen,[['编队页开始行动'],['结算三星标志']]);
+  assert.deepEqual(waits,[800,1000,4500]);
+});
+
 test('视频执行记录保留实际匹配的分 P', async () => {
   const f = fixture([{type:'analyze_video',bv:'BV1uE421A7jm',stage:'AS-MO-1'},{type:'finish'}],{
     device:null,readOnly:true,lookupGuide:async ()=>({part:8,timestamps:[10.5,15.5]}),
