@@ -74,10 +74,17 @@ export function mergeMaaRosterFile(profile, roster, syncTime) {
   return {...merged,observedAt:Math.max(savedAt || 0,fileAt || 0) || Date.now()};
 }
 
+export function formationForRun(checked, preference, rewardQueue) {
+  return rewardQueue ? preference !== 'false' : checked;
+}
+
 export function setupGuides({post,events,getConfig,runDirect}) {
   let plan = null, source = '', mediaUrl = '', pending = null, relatedVideo = null, onlineVideo = null, recentSearch = [];
   let beforeAdapt = null;
   const profiles = new Map();
+  const formationKey = 'arkpilot.autoFormation';
+  $('formation').checked = localStorage.getItem(formationKey) === 'true';
+  $('formation').onchange = () => localStorage.setItem(formationKey, String($('formation').checked));
   try { for (const [name,value] of JSON.parse(localStorage.getItem('arkpilot.rosters') || '[]')) profiles.set(name,value); } catch {}
   function profileMenu(name) {
     $('accountProfile').replaceChildren(new Option('未选择名册',''),...[...profiles.keys()].map(n=>new Option(n,n)));
@@ -330,5 +337,6 @@ export function setupGuides({post,events,getConfig,runDirect}) {
     status('已生成作业草稿，请核对干员、坐标与触发条件。');
   });
   return {render, showResults, attachNotes:notes=>{ $('guideNotes').value=notes; attachment(); },
-    current:() => ({guide:plan,roster:currentRoster(),notes:$('guideNotes').value.trim(),recentSearch,formation:$('formation').checked})};
+    current:(rewardQueue = false) => ({guide:plan,roster:currentRoster(),notes:$('guideNotes').value.trim(),recentSearch,
+      formation:formationForRun($('formation').checked,localStorage.getItem(formationKey),rewardQueue)})};
 }

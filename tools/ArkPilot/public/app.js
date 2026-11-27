@@ -236,7 +236,7 @@ async function submit(event, native = null, label = '', existing = null) {
   let end = false, step, applied = [];
   try {
     const res = existing ? await post('reward-queue/attach',{id:existing.id},local.signal) :
-      await post('run', { ...(native ? {} : modelSettings(config)), ...guides.current(), native, serial, instruction, history: previous,
+      await post('run', { ...(native ? {} : modelSettings(config)), ...guides.current(detached || instruction === '/首通清单'), native, serial, instruction, history: previous,
         backgroundQueue:detached,researchOnly,readOnly: $('mode').value !== 'operate' }, local.signal);
     for await (const e of events(res)) {
       if (e.type === 'queue') {
